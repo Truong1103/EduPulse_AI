@@ -1,0 +1,135 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  }
+  h1, h2, h3, h4, .font-display {
+    font-family: 'Outfit', 'Plus Jakarta Sans', system-ui, sans-serif;
+  }
+}
+
+@keyframes pulseGlow {
+  0%, 100% {
+    transform: scale(1) translateY(0);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.08) translateY(-6px);
+    opacity: 0.85;
+  }
+}
+
+@keyframes floatSlow {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-10px) rotate(2deg);
+  }
+}
+
+.animate-float-slow {
+  animation: floatSlow 7s ease-in-out infinite;
+}
+
+.animate-pulse-glow {
+  animation: pulseGlow 6s ease-in-out infinite;
+}
+
+/* ==========================================================================
+   IMAGE HOVER SHEEN / GLASS SWEEP EFFECT (TOÀN BỘ ẢNH)
+   - Bình thường hiển thị bình thường.
+   - Khi hover: Dải sáng trắng/translucent mỏng lướt qua mặt kính từ trái sang phải 1 lần.
+   - Zoom ảnh nhẹ 1.04 lần, không làm tràn khung hình.
+   - Khi rời chuột: Trở về ban đầu mượt mà.
+   ========================================================================== */
+
+/* Khung bọc ảnh: Cố định kích thước, chống tràn, cách ly layer render */
+.img-sheen,
+[data-img-sheen],
+.overflow-hidden:has(> img:only-child) {
+  position: relative;
+  overflow: hidden !important;
+  isolation: isolate;
+  display: block;
+}
+
+/* Dải ánh sáng trắng/translucent mỏng chéo góc 25 độ */
+.img-sheen::after,
+[data-img-sheen]::after,
+.overflow-hidden:has(> img:only-child)::after {
+  content: '';
+  position: absolute;
+  top: -60%;
+  left: -130%;
+  width: 55%;
+  height: 220%;
+  background: linear-gradient(
+    115deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.08) 25%,
+    rgba(255, 255, 255, 0.5) 50%,
+    rgba(255, 255, 255, 0.08) 75%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  transform: rotate(25deg);
+  pointer-events: none;
+  opacity: 0;
+  z-index: 10;
+}
+
+/* Khi hover: Vệt sáng quét nhanh qua toàn bộ ảnh sang phía đối diện (chỉ 1 lần) */
+.img-sheen:hover::after,
+[data-img-sheen]:hover::after,
+.overflow-hidden:has(> img:only-child):hover::after {
+  opacity: 1;
+  animation: glassSheenSweep 0.72s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes glassSheenSweep {
+  0% {
+    left: -130%;
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  75% {
+    opacity: 0.85;
+  }
+  100% {
+    left: 175%;
+    opacity: 0;
+  }
+}
+
+/* Zoom ảnh rất nhẹ 1.04 lần (trong dải 1.03 - 1.05) kết hợp easing mượt mà */
+.img-sheen img,
+[data-img-sheen] img,
+.overflow-hidden:has(> img:only-child) > img {
+  transition: transform 0.65s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  will-change: transform;
+}
+
+.img-sheen:hover img,
+[data-img-sheen]:hover img,
+.overflow-hidden:has(> img:only-child):hover > img {
+  transform: scale(1.04) !important;
+}
+
+/* Hỗ trợ prefers-reduced-motion: vô hiệu hóa chuyển động nếu người dùng kích hoạt */
+@media (prefers-reduced-motion: reduce) {
+  .img-sheen::after,
+  [data-img-sheen]::after,
+  .overflow-hidden:has(> img:only-child)::after {
+    display: none !important;
+    animation: none !important;
+  }
+  .img-sheen img,
+  [data-img-sheen] img,
+  .overflow-hidden:has(> img:only-child) > img {
+    transform: none !important;
+    transition: none !important;
+  }
+}

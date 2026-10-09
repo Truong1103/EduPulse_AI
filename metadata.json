@@ -1,0 +1,6 @@
+{
+  "name": "EduPulse AI",
+  "description": "Nền tảng web hỗ trợ học sinh duy trì mục tiêu luyện tập dài hạn, nhận diện khó khăn sớm và đồng hành cùng AI thông minh.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
