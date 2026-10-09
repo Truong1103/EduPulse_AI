@@ -17,6 +17,7 @@ import {
   RefreshCw,
   TrendingUp,
   BarChart2,
+  BarChart3,
   AlertTriangle,
   Search,
   ChevronDown,
@@ -45,9 +46,11 @@ import {
   approveBuddyLink
 } from '../../services/api';
 import { DualPlanBars, EmptyHint } from '../common/StudyChrome';
-import { REQUEST_PIPELINE, weekStatusLabel } from '../../data/studyCatalog';
+import { REQUEST_PIPELINE, mondayOf, weekStatusLabel } from '../../data/studyCatalog';
 import { DetailSheet } from '../common/DetailSheet';
 import { DualLineChart } from '../common/StudyCharts';
+import { MentorStatisticsPanel } from './MentorStatisticsPanel';
+import { buildMentorReviewSignals } from '../../utils/statistics';
 
 interface MentorDashboardProps {
   isLeadMentor: boolean;
@@ -58,7 +61,7 @@ export const MentorDashboard: React.FC<MentorDashboardProps> = ({ isLeadMentor, 
   const { currentUser } = useAuth();
   const mentorId = currentUser?.id || '';
 
-  const [activeTab, setActiveTab] = useState<'students' | 'requests' | 'encourage' | 'buddy' | 'lead-review' | 'lead-consents'>('students');
+  const [activeTab, setActiveTab] = useState<'statistics' | 'follow-up' | 'students' | 'requests' | 'encourage' | 'buddy' | 'lead-review' | 'lead-consents'>('statistics');
   const [buddyPairs, setBuddyPairs] = useState<any[]>([]);
   const [leadConsents, setLeadConsents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -75,7 +78,7 @@ export const MentorDashboard: React.FC<MentorDashboardProps> = ({ isLeadMentor, 
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [studentDetail, setStudentDetail] = useState<any | null>(null);
   const [selectedStudentForStatus, setSelectedStudentForStatus] = useState<any | null>(null);
-  const [mentorStatusWeek, setMentorStatusWeek] = useState(new Date().toISOString().split('T')[0]);
+  const [mentorStatusWeek, setMentorStatusWeek] = useState(mondayOf(new Date().toISOString().split('T')[0]));
   const [mentorStatusChoice, setMentorStatusChoice] = useState<'training' | 'resting' | 'achieved' | 'stopped'>('training');
   const [mentorStatusNote, setMentorStatusNote] = useState('');
 
@@ -189,7 +192,6 @@ export const MentorDashboard: React.FC<MentorDashboardProps> = ({ isLeadMentor, 
     if (!selectedStudentForStatus) return;
     try {
       await confirmStatusByMentor(
-        mentorId,
         selectedStudentForStatus.student_id,
         mentorStatusWeek,
         mentorStatusChoice,
@@ -221,8 +223,24 @@ export const MentorDashboard: React.FC<MentorDashboardProps> = ({ isLeadMentor, 
   };
 
   const unhandledRequestsCount = supportRequests.filter((r) => r.status !== 'done').length;
+  const followUpSignals = useMemo(() => buildMentorReviewSignals(students.map((student: any) => ({
+    studentId: student.student_id,
+    studentCode: student.student_code,
+    activityGroup: student.activity_group,
+    openSupportRequests: supportRequests.filter((request) => request.studentId === student.student_id && request.status !== 'done').length,
+    weeklySummaries: summaries
+      .filter((summary) => summary.student_code === student.student_code)
+      .map((summary: any) => ({
+        weekStart: summary.week_start,
+        pctCurrent: summary.pct_current == null ? null : Number(summary.pct_current),
+        plannedCurrent: Number(summary.planned_current || 0),
+        weeklyStatus: summary.weekly_status
+      }))
+  }))), [students, summaries, supportRequests]);
 
   const mentorTabs = [
+    { id: 'statistics', label: 'Thống kê', icon: BarChart3 },
+    { id: 'follow-up', label: 'Cần xem lại', icon: AlertTriangle, badge: followUpSignals.length },
     { id: 'students', label: 'Học sinh phụ trách', icon: Users, badge: students.length },
     { id: 'requests', label: 'Yêu cầu hỗ trợ', icon: MessageSquare, badge: unhandledRequestsCount },
     { id: 'encourage', label: 'Phản hồi tiến bộ', icon: Send },
@@ -299,6 +317,44 @@ export const MentorDashboard: React.FC<MentorDashboardProps> = ({ isLeadMentor, 
       activeTab={activeTab}
       onTabChange={(id) => setActiveTab(id as any)}
     >
+        {activeTab === 'statistics' && (
+          <MentorStatisticsPanel
+            activityGroups={[...new Set(students.map((student: any) => student.activity_group).filter(Boolean))] as string[]}
+          />
+        )}
+
+        {activeTab === 'follow-up' && (
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
+              <h2 className="text-base font-bold text-amber-950">Tín hiệu cần trao đổi</h2>
+              <p className="mt-1 text-xs leading-relaxed text-amber-900">Danh sách chỉ dùng tín hiệu quan sát: học sinh đã gửi yêu cầu hỗ trợ hoặc completion giảm qua 3 tuần có kế hoạch liên tiếp. Đây không phải điểm nguy cơ, chẩn đoán hay kết luận bỏ cuộc; Mentor cần trao đổi để xác nhận bối cảnh.</p>
+            </div>
+            {followUpSignals.length === 0 ? (
+              <EmptyHint title="Chưa có tín hiệu cần xem lại">Khi có yêu cầu hỗ trợ chưa đóng hoặc xu hướng completion giảm 3 tuần liên tiếp, học sinh sẽ xuất hiện ở đây.</EmptyHint>
+            ) : (
+              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                <div className="grid grid-cols-[minmax(90px,0.5fr)_minmax(120px,0.7fr)_minmax(0,1.5fr)_auto] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-[10px] font-bold uppercase text-slate-500">
+                  <span>Mã HS</span><span>Nhóm</span><span>Tín hiệu quan sát</span><span></span>
+                </div>
+                {followUpSignals.map((signal) => {
+                  const student = students.find((item) => item.student_id === signal.studentId);
+                  return (
+                    <div key={signal.studentId} className="grid grid-cols-[minmax(90px,0.5fr)_minmax(120px,0.7fr)_minmax(0,1.5fr)_auto] items-center gap-3 border-b border-slate-100 px-4 py-3 text-xs last:border-b-0">
+                      <span className="font-mono font-bold text-slate-900">{signal.studentCode}</span>
+                      <span className="text-slate-600">{signal.activityGroup || '—'}</span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {signal.openSupportRequests > 0 && <span className="rounded-md bg-sky-50 px-2 py-1 text-[10px] font-semibold text-sky-800">{signal.openSupportRequests} yêu cầu chưa đóng</span>}
+                        {signal.decliningThreeWeekCompletion && <span className="rounded-md bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-900">Completion giảm 3 tuần · {signal.previousCompletionPct}% → {signal.latestCompletionPct}%</span>}
+                      </div>
+                      <button type="button" onClick={() => student && setStudentDetail(student)} className="rounded-lg border border-slate-200 px-2.5 py-1.5 font-semibold text-slate-700 hover:bg-slate-50">Xem</button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* TAB 1: DANH SÁCH & TIẾN ĐỘ TUẦN */}
         {activeTab === 'students' && (
           <div className="space-y-4">
@@ -444,7 +500,7 @@ export const MentorDashboard: React.FC<MentorDashboardProps> = ({ isLeadMentor, 
                       <input
                         type="date"
                         value={mentorStatusWeek}
-                        onChange={(e) => setMentorStatusWeek(e.target.value)}
+                        onChange={(e) => e.target.value && setMentorStatusWeek(mondayOf(e.target.value))}
                         className="w-full p-2.5 rounded-xl border border-slate-200 text-xs"
                         required
                       />
@@ -699,12 +755,12 @@ export const MentorDashboard: React.FC<MentorDashboardProps> = ({ isLeadMentor, 
                   </div>
 
                   <div className="p-4 rounded-2xl bg-emerald-50/50 border border-emerald-200/60">
-                    <span className="text-[11px] font-bold text-emerald-700 uppercase block">Chênh lệch Nguy cơ (Δ)</span>
+                    <span className="text-[11px] font-bold text-emerald-700 uppercase block">Chênh lệch retention phụ (Δ)</span>
                     <span className="text-2xl font-black text-emerald-700 block mt-1">
-                      +{efficacySummary.difference?.riskDifferencePct || 0}%
+                      {efficacySummary.difference?.riskDifferencePct == null ? '—' : `${efficacySummary.difference.riskDifferencePct > 0 ? '+' : ''}${efficacySummary.difference.riskDifferencePct}%`}
                     </span>
                     <span className="text-xs text-slate-500 block mt-0.5">
-                      95% CI: [{efficacySummary.difference?.ci95Lower || 0}%, {efficacySummary.difference?.ci95Upper || 0}%]
+                      95% CI retention: [{efficacySummary.difference?.ci95Lower ?? '—'}%, {efficacySummary.difference?.ci95Upper ?? '—'}%]
                     </span>
                   </div>
                 </div>

@@ -40,6 +40,7 @@ import {
 } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
 import { RoleWorkspace } from '../common/RoleWorkspace';
+import { FrequencyHistogram } from '../common/StudyCharts';
 import {
   getAllUserProfiles,
   updateUserRole,
@@ -91,6 +92,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
     totalLogs: number;
     durationOutliers: number;
     duplicateKeys: number;
+    doneLogs: number;
+    partialLogs: number;
+    missedLogs: number;
+    logsWithSkippedFields: number;
+    activeStudents: number;
+    activeConsentedStudents: number;
+    randomizedStudents: number;
+    activeStudentsWithoutLogs: number;
+    statusDistribution: { label: string; count: number }[];
+    missingness: { field: string; missing: number; denominator: number }[];
     outlierRows?: any[];
     duplicateRows?: string[];
     logsThisWeek?: number;
@@ -1370,17 +1381,53 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
         {activeTab === 'quality' && (
           <div className="space-y-4">
             <div className="bg-white p-6 rounded-3xl border border-slate-200/90 shadow-sm space-y-3">
-              <h3 className="text-lg font-bold text-slate-900">Kiểm tra chất lượng nhật ký (đề cương 5.3)</h3>
-              <p className="text-xs text-slate-500">Phân biệt quên ghi với bỏ tập. Thời lượng &gt; 240 phút hoặc &lt; 0 là bất thường. Không sửa nhật ký gốc từ đây.</p>
+              <h3 className="text-lg font-bold text-slate-900">Chất lượng dữ liệu &amp; luồng mẫu (đề cương 5.3)</h3>
+              <p className="text-xs text-slate-500">Tổng hợp chính xác trên toàn database, không giới hạn 2.000 dòng. Các trường thiếu không được xem là số 0; log gốc không bị sửa.</p>
               {!quality ? (
                 <p className="text-xs text-slate-400">Đang tải hoặc chưa có dữ liệu.</p>
               ) : (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <div className="p-4 rounded-2xl bg-slate-50 border"><span className="text-[11px] text-slate-500 uppercase">Tổng nhật ký</span><p className="text-2xl font-black">{quality.totalLogs}</p></div>
-                  <div className="p-4 rounded-2xl bg-slate-50 border"><span className="text-[11px] text-slate-500 uppercase">Tuần này</span><p className="text-2xl font-black">{quality.logsThisWeek ?? 0}</p></div>
-                  <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200"><span className="text-[11px] text-amber-800 uppercase">Thời lượng bất thường</span><p className="text-2xl font-black">{quality.durationOutliers}</p></div>
-                  <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200"><span className="text-[11px] text-rose-800 uppercase">Khóa trùng</span><p className="text-2xl font-black">{quality.duplicateKeys}</p></div>
-                </div>
+                <>
+                  <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                    <div className="p-4 rounded-2xl bg-slate-50 border"><span className="text-[11px] text-slate-500 uppercase">Tổng nhật ký</span><p className="text-2xl font-black">{quality.totalLogs}</p></div>
+                    <div className="p-4 rounded-2xl bg-slate-50 border"><span className="text-[11px] text-slate-500 uppercase">Tuần này</span><p className="text-2xl font-black">{quality.logsThisWeek ?? 0}</p></div>
+                    <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200"><span className="text-[11px] text-amber-800 uppercase">Thời lượng bất thường</span><p className="text-2xl font-black">{quality.durationOutliers}</p></div>
+                    <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200"><span className="text-[11px] text-rose-800 uppercase">Khóa trùng</span><p className="text-2xl font-black">{quality.duplicateKeys}</p></div>
+                    <div className="p-4 rounded-2xl bg-slate-50 border"><span className="text-[11px] text-slate-500 uppercase">HS hoạt động</span><p className="text-2xl font-black">{quality.activeStudents}</p></div>
+                    <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200"><span className="text-[11px] text-emerald-800 uppercase">Còn consent</span><p className="text-2xl font-black">{quality.activeConsentedStudents}</p></div>
+                    <div className="p-4 rounded-2xl bg-sky-50 border border-sky-200"><span className="text-[11px] text-sky-800 uppercase">Đã phân nhóm</span><p className="text-2xl font-black">{quality.randomizedStudents}</p></div>
+                    <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200"><span className="text-[11px] text-amber-800 uppercase">Chưa có nhật ký</span><p className="text-2xl font-black">{quality.activeStudentsWithoutLogs}</p></div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-5 pt-3 lg:grid-cols-2">
+                    <FrequencyHistogram
+                      title="Phân bố trạng thái nhật ký"
+                      rows={quality.statusDistribution}
+                      denominator={quality.totalLogs}
+                      xAxisLabel="Trạng thái buổi"
+                    />
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-900">Missingness theo trường</h4>
+                      <p className="mb-3 mt-1 text-[11px] text-slate-500">Tỷ lệ thiếu = số thiếu / tổng nhật ký.</p>
+                      <div className="space-y-3">
+                        {quality.missingness.map((item) => {
+                          const pct = item.denominator ? (item.missing / item.denominator) * 100 : 0;
+                          return (
+                            <div key={item.field} className="space-y-1">
+                              <div className="flex justify-between gap-3 text-[11px]">
+                                <span>{item.field}</span>
+                                <span className="font-semibold tabular-nums">{item.missing}/{item.denominator} · {pct.toFixed(1)}%</span>
+                              </div>
+                              <div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-amber-500" style={{ width: `${Math.min(100, pct)}%` }} /></div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="pt-3 text-xs text-slate-600">
+                    Trạng thái: hoàn thành <strong>{quality.doneLogs}</strong> · một phần <strong>{quality.partialLogs}</strong> · chưa làm <strong>{quality.missedLogs}</strong> · có trường bỏ qua <strong>{quality.logsWithSkippedFields}</strong>.
+                  </div>
+                </>
               )}
             </div>
             {quality?.outlierRows && quality.outlierRows.length > 0 && (
@@ -1388,7 +1435,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
                 <h4 className="text-sm font-bold">Bản ghi thời lượng bất thường</h4>
                 {quality.outlierRows.map((r: any) => (
                   <div key={r.id} className="text-xs p-2 rounded-lg bg-amber-50 border border-amber-100 font-mono">
-                    {r.session_date} · {r.duration_min} phút · HS {String(r.student_id).slice(0, 8)}
+                    {r.session_date} · {r.duration_min} phút · HS {r.student_code}
                   </div>
                 ))}
               </div>

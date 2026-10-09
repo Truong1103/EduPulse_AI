@@ -51,6 +51,76 @@ export interface MentorAssignment {
   assignedAt: string;
 }
 
+export interface CountDistribution {
+  label: string;
+  count: number;
+}
+
+export interface ValueDistribution {
+  value: number;
+  count: number;
+}
+
+export interface MentorWeeklyStatistic {
+  weekStart: string;
+  n: number;
+  pctOriginal: number | null;
+  pctCurrent: number | null;
+  done: number;
+  planned: number;
+}
+
+export interface MentorStatistics {
+  cohortSize: number;
+  studentsWithWeeklyData: number;
+  studentsMissingWeeklyData: number;
+  studentsWithValidPlan: number;
+  activeStudents: number;
+  inactiveStudents: number;
+  participationRate: number | null;
+  logCount: number;
+  activityMissingN: number;
+  activityDistribution: CountDistribution[];
+  barrierN: number;
+  barrierMissingN: number;
+  barrierDistribution: CountDistribution[];
+  meanCompletedSessions: number | null;
+  medianCompletedSessions: number | null;
+  sessionCountDistribution: ValueDistribution[];
+  meanCompletionPct: number | null;
+  medianCompletionPct: number | null;
+  motivationN: number;
+  motivationMissingN: number;
+  motivationMean: number | null;
+  motivationMedian: number | null;
+  motivationDistribution: ValueDistribution[];
+  difficultyN: number;
+  difficultyMissingN: number;
+  difficultyMean: number | null;
+  difficultyMedian: number | null;
+  difficultyDistribution: ValueDistribution[];
+  intentN: number;
+  intentMissingN: number;
+  intentMean: number | null;
+  intentMedian: number | null;
+  intentDistribution: ValueDistribution[];
+  weeklyTrend: MentorWeeklyStatistic[];
+}
+
+export interface MentorStudentLevelScale {
+  n: number;
+  missingN: number;
+  mean: number | null;
+  median: number | null;
+  distribution: ValueDistribution[];
+}
+
+export interface MentorStudentLevelStatistics {
+  motivation: MentorStudentLevelScale;
+  difficulty: MentorStudentLevelScale;
+  intent: MentorStudentLevelScale;
+}
+
 // Invited User
 export interface InvitedUser {
   id: string;
@@ -281,6 +351,62 @@ export interface StudyOutcome {
   tFollowUpWeeks: number;
   sampleSize: number;
   planChangesCount?: number;
+}
+
+export type ConfirmedOutcomeStatus = 'continuing' | 'resting' | 'achieved' | 'dropout_confirmed' | 'unknown';
+
+export interface ConfirmedStudyOutcome {
+  studentCode: string;
+  arm: 'control' | 'intervention';
+  consentState: 'active' | 'withdrawn' | 'consent_missing';
+  assignedAt: string;
+  assignmentDateSource: 'recorded' | 'legacy_approved_at' | 'legacy_consent' | 'legacy_goal' | 'legacy_unknown';
+  followUpDue: boolean;
+  followUpComplete: boolean;
+  outcome: ConfirmedOutcomeStatus | null;
+  effectiveDate: string | null;
+  weekStart: string | null;
+  confirmerRole: 'student' | 'mentor' | null;
+  definitionVersion: number | null;
+  recordedAt: string | null;
+}
+
+export interface ResearchAnalysisSnapshot {
+  id: string;
+  analysisVersion: string;
+  config: Record<string, unknown>;
+  results: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface ResearchSupportAndPredictionSummary {
+  support: {
+    totalInvites: number;
+    supportedStudents: number;
+    acceptedInvites: number;
+    declinedInvites: number;
+    snoozedInvites: number;
+    helpfulResponses: number;
+    meanHelpfulRating: number | null;
+  };
+  pairedCompletion: {
+    n: number;
+    meanBeforePct: number | null;
+    meanAfterPct: number | null;
+    meanChangePp: number | null;
+    medianChangePp: number | null;
+    improvedN: number;
+    unchangedN: number;
+    declinedN: number;
+  };
+  modelPredictions: {
+    predictionRows: number;
+    students: number;
+    flaggedRows: number;
+    meanPredictedProbability: number | null;
+    evaluationStatus: string;
+    probabilityBands: CountDistribution[];
+  };
 }
 
 // Audit Log

@@ -133,3 +133,43 @@
     transition: none !important;
   }
 }
+
+@media print {
+  @page {
+    margin: 14mm;
+  }
+
+  body {
+    background: #fff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  nav,
+  button,
+  footer,
+  [role='alert'],
+  [role='status'] {
+    display: none !important;
+  }
+
+  .sticky {
+    position: static !important;
+  }
+
+  .min-h-screen {
+    min-height: 0 !important;
+    padding: 0 !important;
+  }
+
+  .shadow-sm,
+  .shadow-xs,
+  .shadow-2xl {
+    box-shadow: none !important;
+  }
+
+  section,
+  article {
+    break-inside: avoid;
+  }
+}

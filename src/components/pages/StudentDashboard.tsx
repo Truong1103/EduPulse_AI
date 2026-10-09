@@ -74,7 +74,8 @@ import { triggerConfetti } from '../../utils/confetti';
 import { DualPlanBars, BarrierPicker, ScaleFive, EmptyHint } from '../common/StudyChrome';
 import { ACTIVITY_GROUPS, LOG_STATUSES, barrierLabel, WEEKDAYS, BASELINE_SURVEY, inWeek } from '../../data/studyCatalog';
 import { DetailSheet, DrillCard } from '../common/DetailSheet';
-import { DualLineChart, DonutStatus, MotivationTrendChart, StreakCalendar, BarrierDistributionChart, SparkCard, Sparkline } from '../common/StudyCharts';
+import { DualLineChart, DonutStatus, FrequencyHistogram, MotivationTrendChart, StreakCalendar, BarrierDistributionChart, SparkCard, Sparkline } from '../common/StudyCharts';
+import { calculateStrictWeeklyCompletion, frequencyTable, summarizeNumericFrequencies } from '../../utils/statistics';
 
 interface StudentDashboardProps {
   onAddToast: (title: string, message: string, type?: 'success' | 'info' | 'warning') => void;
@@ -228,6 +229,43 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
       / Math.max(1, sessionLogs.filter(l => l.difficulty != null).length);
     const avgDuration = sessionLogs.filter(l => l.durationMin != null).reduce((s, l) => s + (l.durationMin || 0), 0)
       / Math.max(1, sessionLogs.filter(l => l.durationMin != null).length);
+    const durationFrequencies = frequencyTable(sessionLogs.map((log) => log.durationMin));
+    const motivationFrequencies = frequencyTable(sessionLogs.map((log) => log.motivation));
+    const difficultyFrequencies = frequencyTable(sessionLogs.map((log) => log.difficulty));
+    const intentFrequencies = frequencyTable(sessionLogs.map((log) => log.intentContinue));
+    const motivationSummary = summarizeNumericFrequencies(motivationFrequencies);
+    const difficultySummary = summarizeNumericFrequencies(difficultyFrequencies);
+    const durationSummary = summarizeNumericFrequencies(durationFrequencies);
+    const statusFrequencies = frequencyTable(sessionLogs.map((log) => log.status)).map((row) => ({
+      label: row.value === 'done' ? 'Hoàn thành' : row.value === 'partial' ? 'Một phần' : 'Chưa làm',
+      count: row.count
+    }));
+    const durationHistogram = [
+      { label: '0–15', count: sessionLogs.filter((log) => log.durationMin != null && log.durationMin <= 15).length },
+      { label: '16–30', count: sessionLogs.filter((log) => log.durationMin != null && log.durationMin > 15 && log.durationMin <= 30).length },
+      { label: '31–45', count: sessionLogs.filter((log) => log.durationMin != null && log.durationMin > 30 && log.durationMin <= 45).length },
+      { label: '46–60', count: sessionLogs.filter((log) => log.durationMin != null && log.durationMin > 45 && log.durationMin <= 60).length },
+      { label: '61+', count: sessionLogs.filter((log) => log.durationMin != null && log.durationMin > 60).length }
+    ];
+    const strictWeeklyCompletion = calculateStrictWeeklyCompletion({
+      goalId: goal?.id,
+      weeklySummaries: weeklySummaries.map((week) => ({
+        weekStart: week.weekStart,
+        plannedCurrent: week.plannedCurrent,
+        plannedOriginal: week.plannedOriginal
+      })),
+      sessionLogs,
+      planVersions,
+      weeklyStatuses,
+      restPeriods
+    });
+    const weeklyCompletionHistogram = [
+      { label: '0–24%', count: strictWeeklyCompletion.filter((week) => (week.pctCurrent || 0) < 25).length },
+      { label: '25–49%', count: strictWeeklyCompletion.filter((week) => (week.pctCurrent || 0) >= 25 && (week.pctCurrent || 0) < 50).length },
+      { label: '50–74%', count: strictWeeklyCompletion.filter((week) => (week.pctCurrent || 0) >= 50 && (week.pctCurrent || 0) < 75).length },
+      { label: '75–99%', count: strictWeeklyCompletion.filter((week) => (week.pctCurrent || 0) >= 75 && (week.pctCurrent || 0) < 100).length },
+      { label: '100%+', count: strictWeeklyCompletion.filter((week) => (week.pctCurrent || 0) >= 100).length }
+    ];
 
     // Streak: consecutive done days ending today
     const logSet = new Set(doneLogs.map(l => l.sessionDate));
@@ -241,18 +279,37 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
       else break;
     }
 
-    // Retention rate (vs current plan)
-    const totalCurrentPlan = weeklySummaries.reduce((s, w) => s + w.plannedCurrent, 0);
-    const totalDoneInSummary = weeklySummaries.reduce((s, w) => s + w.done, 0);
-    const retentionPct = totalCurrentPlan > 0 ? Math.round((totalDoneInSummary / totalCurrentPlan) * 100) : null;
+    const totalCurrentPlan = strictWeeklyCompletion.reduce((sum, week) => sum + week.plannedCurrent, 0);
+    const totalDoneInSummary = strictWeeklyCompletion.reduce((sum, week) => sum + week.validDone, 0);
+    const completionPct = totalCurrentPlan > 0 ? Math.round((totalDoneInSummary / totalCurrentPlan) * 100) : null;
 
-    // Weekly sparkline of pctCurrent
-    const weekSparkline = weeklySummaries.map(w => Number(w.pctCurrent || 0));
+    const weekSparkline = strictWeeklyCompletion.map((week) => Number(week.pctCurrent || 0));
     const motSparkline = sessionLogs.filter(l => l.motivation != null).slice(-8).map(l => l.motivation!);
     const avgLowIntent = sessionLogs.filter(l => (l.intentContinue || 5) <= 2).length;
 
-    return { totalDone, totalLogs, avgMotivation, avgDifficulty, avgDuration, streak, retentionPct, weekSparkline, motSparkline, avgLowIntent };
-  }, [sessionLogs, weeklySummaries]);
+    return {
+      totalDone,
+      totalLogs,
+      avgMotivation,
+      avgDifficulty,
+      avgDuration,
+      motivationFrequencies,
+      difficultyFrequencies,
+      intentFrequencies,
+      motivationSummary,
+      difficultySummary,
+      durationSummary,
+      statusFrequencies,
+      durationHistogram,
+      weeklyCompletionHistogram,
+      strictWeeklyCompletion,
+      streak,
+      completionPct,
+      weekSparkline,
+      motSparkline,
+      avgLowIntent
+    };
+  }, [goal?.id, sessionLogs, weeklySummaries, planVersions, weeklyStatuses, restPeriods]);
 
   const overviewInsight = useMemo(() => {
     if (sessionLogs.length === 0) {
@@ -368,10 +425,8 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
     e.preventDefault();
     try {
       await confirmWeeklyStatus(
-        studentId,
         weekStartChoice,
         weekStatusChoice,
-        'student',
         weekStatusNote || undefined
       );
       triggerConfetti();
@@ -821,9 +876,9 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                 />
                 <SparkCard
                   label="Tỷ lệ duy trì"
-                  tone={computedMetrics.retentionPct != null && computedMetrics.retentionPct >= 70 ? 'emerald' : computedMetrics.retentionPct != null ? 'amber' : 'slate'}
-                  value={computedMetrics.retentionPct != null ? <>{computedMetrics.retentionPct}<span className="text-xs font-semibold text-slate-500 ml-1">%</span></> : '—'}
-                  hint="So với kế hoạch hiện tại · tính từ weekly_summary"
+                  tone={computedMetrics.completionPct != null && computedMetrics.completionPct >= 70 ? 'emerald' : computedMetrics.completionPct != null ? 'amber' : 'slate'}
+                  value={computedMetrics.completionPct != null ? <>{computedMetrics.completionPct}<span className="text-xs font-semibold text-slate-500 ml-1">%</span></> : '—'}
+                  hint="Chỉ buổi done / kế hoạch hợp lệ · loại nghỉ và partial"
                   sparkValues={computedMetrics.weekSparkline}
                   onClick={() => { setShowDetailInsight(true); }}
                 />
@@ -925,9 +980,9 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                     </div>
                   </div>
                   <div className="rounded-2xl bg-sky-50 p-4 border border-sky-100">
-                    <p className="text-[10px] uppercase tracking-wide text-sky-600">Duy trì kế hoạch</p>
-                    <p className="text-2xl font-extrabold mt-1 text-slate-900">{computedMetrics.retentionPct != null ? `${computedMetrics.retentionPct}%` : '—'}</p>
-                    <p className="text-[10px] text-slate-500 mt-1">Tỷ lệ hoàn thành so với kế hoạch</p>
+                    <p className="text-[10px] uppercase tracking-wide text-sky-600">Hoàn thành kế hoạch</p>
+                    <p className="text-2xl font-extrabold mt-1 text-slate-900">{computedMetrics.completionPct != null ? `${computedMetrics.completionPct}%` : '—'}</p>
+                    <p className="text-[10px] text-slate-500 mt-1">Chỉ status=done · tuần nghỉ/không lịch không tính</p>
                   </div>
                   <div className="rounded-2xl bg-amber-50 p-4 border border-amber-100">
                     <p className="text-[10px] uppercase tracking-wide text-amber-600">Động lực TB</p>
@@ -952,37 +1007,43 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                   ) : (
                     <div className="space-y-5 pt-1">
                       <DualLineChart
-                        title="Xu hướng % hoàn thành theo tuần"
-                        caption="Trục dọc: phần trăm buổi hoàn thành. Chấm để mở nhật ký đúng tuần đó."
+                        title="Xu hướng completion theo tuần"
+                        caption="Chỉ đếm buổi status=done; partial, tuần nghỉ và tuần chưa có kế hoạch hợp lệ được loại."
                         seriesA="Kế hoạch ban đầu"
                         seriesB="Kế hoạch hiện tại"
-                        points={weeklySummaries.map((ws, idx) => ({
+                        points={computedMetrics.strictWeeklyCompletion.filter((week) => week.pctOriginal != null).map((week, idx) => ({
                           label: `Tuần ${idx + 1}`,
-                          a: ws.pctOriginal,
-                          b: ws.pctCurrent,
-                          meta: `${ws.done} buổi · ${ws.weekStart}`
+                          a: week.pctOriginal || 0,
+                          b: week.pctCurrent || 0,
+                          meta: `${week.validDone}/${week.plannedCurrent} buổi · ${week.weekStart}`
                         }))}
                         onSelect={(i) => {
                           setDetailKind('week');
-                          setDetailFilter(weeklySummaries[i].weekStart);
+                          setDetailFilter(computedMetrics.strictWeeklyCompletion.filter((week) => week.pctOriginal != null)[i].weekStart);
                         }}
                       />
-                      {weeklySummaries.map((ws, idx) => (
+                      {computedMetrics.strictWeeklyCompletion.map((week, idx) => (
+                        <React.Fragment key={week.weekStart}>
+                        {weeklySummaries.find((summary) => summary.weekStart === week.weekStart) && (() => {
+                          const summary = weeklySummaries.find((item) => item.weekStart === week.weekStart)!;
+                          return (
                         <button
-                          key={ws.weekStart}
                           type="button"
                           className="w-full text-left cursor-pointer rounded-xl hover:bg-slate-50 p-2"
-                          onClick={() => { setDetailKind('week'); setDetailFilter(ws.weekStart); }}
+                          onClick={() => { setDetailKind('week'); setDetailFilter(week.weekStart); }}
                         >
                           <DualPlanBars
-                            weekLabel={`Tuần ${idx + 1} · ${ws.weekStart}`}
-                            pctOriginal={ws.pctOriginal}
-                            pctCurrent={ws.pctCurrent}
-                            done={ws.done}
-                            plannedOriginal={ws.plannedOriginal}
-                            plannedCurrent={ws.plannedCurrent}
+                            weekLabel={`Tuần ${idx + 1} · ${week.weekStart} · done-only`}
+                            pctOriginal={week.pctOriginal || 0}
+                            pctCurrent={week.pctCurrent || 0}
+                            done={week.validDone}
+                            plannedOriginal={summary.plannedOriginal}
+                            plannedCurrent={week.plannedCurrent}
                           />
                         </button>
+                          );
+                        })()}
+                        </React.Fragment>
                       ))}
                     </div>
                   )}
@@ -1157,7 +1218,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                       {
                         label: 'Ý định thấp',
                         value: computedMetrics.avgLowIntent,
-                        sub: 'Buổi intent ≤ 2 · nguy cơ bỏ cuộc',
+                        sub: 'Buổi intent ≤ 2 · tín hiệu tự theo dõi, không phải dự đoán',
                         color: computedMetrics.avgLowIntent > 0 ? 'text-rose-700 bg-rose-50 border-rose-200/60' : 'text-emerald-700 bg-emerald-50 border-emerald-200/60'
                       }
                     ].map(m => (
@@ -1169,11 +1230,64 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                     ))}
                   </div>
 
+                  <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                    <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs">
+                      <FrequencyHistogram
+                        title="Phân bố trạng thái buổi tập"
+                        rows={computedMetrics.statusFrequencies}
+                        denominator={sessionLogs.length}
+                        xAxisLabel="Trạng thái nhật ký"
+                      />
+                    </div>
+                    {computedMetrics.strictWeeklyCompletion.length > 0 && (
+                      <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs">
+                        <FrequencyHistogram
+                          title="Phân bố tỷ lệ hoàn thành theo tuần"
+                          rows={computedMetrics.weeklyCompletionHistogram}
+                          denominator={computedMetrics.strictWeeklyCompletion.length}
+                          xAxisLabel="Khoảng % status=done / kế hoạch hiện tại"
+                        />
+                      </div>
+                    )}
+                    <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs">
+                      <FrequencyHistogram
+                        title="Phân bố thời lượng buổi tập"
+                        rows={computedMetrics.durationHistogram}
+                        denominator={sessionLogs.filter((log) => log.durationMin != null).length}
+                        xAxisLabel="Thời lượng (phút)"
+                      />
+                      <dl className="mt-3 grid grid-cols-3 gap-2 border-t border-slate-100 pt-3 text-[11px]">
+                        <div><dt className="text-slate-500">Trung vị</dt><dd className="font-bold text-slate-900">{computedMetrics.durationSummary.median == null ? '—' : `${computedMetrics.durationSummary.median.toFixed(1)} phút`}</dd></div>
+                        <div><dt className="text-slate-500">Q1–Q3</dt><dd className="font-bold text-slate-900">{computedMetrics.durationSummary.q1 == null || computedMetrics.durationSummary.q3 == null ? '—' : `${computedMetrics.durationSummary.q1.toFixed(1)}–${computedMetrics.durationSummary.q3.toFixed(1)}`}</dd></div>
+                        <div><dt className="text-slate-500">N hợp lệ</dt><dd className="font-bold text-slate-900">{computedMetrics.durationSummary.n}</dd></div>
+                      </dl>
+                    </div>
+                    {[
+                      { title: 'Động lực', rows: computedMetrics.motivationFrequencies, summary: computedMetrics.motivationSummary },
+                      { title: 'Độ khó', rows: computedMetrics.difficultyFrequencies, summary: computedMetrics.difficultySummary },
+                      { title: 'Ý định tiếp tục', rows: computedMetrics.intentFrequencies, summary: summarizeNumericFrequencies(frequencyTable(sessionLogs.map((log) => log.intentContinue))) }
+                    ].map((scale) => (
+                      <div key={scale.title} className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs">
+                        <FrequencyHistogram
+                          title={`Phân bố ${scale.title.toLowerCase()}`}
+                          rows={scale.rows.map((row) => ({ label: String(row.value), count: row.count }))}
+                          denominator={scale.summary.n}
+                          xAxisLabel="Mức tự đánh giá (1–5)"
+                        />
+                        <dl className="mt-3 grid grid-cols-3 gap-2 border-t border-slate-100 pt-3 text-[11px]">
+                          <div><dt className="text-slate-500">Mean</dt><dd className="font-bold text-slate-900">{scale.summary.mean == null ? '—' : scale.summary.mean.toFixed(2)}</dd></div>
+                          <div><dt className="text-slate-500">Median</dt><dd className="font-bold text-slate-900">{scale.summary.median == null ? '—' : scale.summary.median.toFixed(2)}</dd></div>
+                          <div><dt className="text-slate-500">IQR</dt><dd className="font-bold text-slate-900">{scale.summary.iqr == null ? '—' : scale.summary.iqr.toFixed(2)}</dd></div>
+                        </dl>
+                      </div>
+                    ))}
+                  </div>
+
                   {/* Motivation & Difficulty trend */}
                   <div className="bg-white p-6 rounded-3xl border border-slate-200/90 shadow-xs space-y-4">
                     <div>
                       <h3 className="text-sm font-bold text-slate-900">Xu hướng động lực & độ khó (8 buổi gần nhất)</h3>
-                      <p className="text-[11px] text-slate-500 mt-0.5">Trục dọc: thang 1–5. Nhìn xu hướng giảm động lực liên tục để phát hiện nguy cơ bỏ cuộc sớm.</p>
+                      <p className="text-[11px] text-slate-500 mt-0.5">Trục dọc: thang 1–5. Xu hướng giúp bạn trao đổi hoặc điều chỉnh kế hoạch; không dự đoán chắc chắn việc bỏ mục tiêu.</p>
                     </div>
                     <MotivationTrendChart logs={sessionLogs} onlyRecent={8} />
                   </div>
@@ -1190,26 +1304,26 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                   )}
 
                   {/* Weekly completion trend */}
-                  {weeklySummaries.length >= 2 && (
+                  {computedMetrics.strictWeeklyCompletion.length >= 2 && (
                     <div className="bg-white p-6 rounded-3xl border border-slate-200/90 shadow-xs space-y-4">
                       <div>
-                        <h3 className="text-sm font-bold text-slate-900">Xu hướng % hoàn thành theo tuần</h3>
-                        <p className="text-[11px] text-slate-500 mt-0.5">So sánh kế hoạch ban đầu (xám) và kế hoạch hiện tại (xanh). Bấm điểm để mở nhật ký tuần đó.</p>
+                        <h3 className="text-sm font-bold text-slate-900">Xu hướng hoàn thành đúng tiêu chí theo tuần</h3>
+                        <p className="text-[11px] text-slate-500 mt-0.5">Chỉ đếm nhật ký status=done; loại partial, tuần nghỉ và tuần chưa có kế hoạch hợp lệ. Bấm điểm để mở nhật ký tuần đó.</p>
                       </div>
                       <DualLineChart
                         title=""
                         caption=""
                         seriesA="Kế hoạch ban đầu"
                         seriesB="Kế hoạch hiện tại"
-                        points={weeklySummaries.map((ws, idx) => ({
+                        points={computedMetrics.strictWeeklyCompletion.filter((week) => week.pctOriginal != null).map((week, idx) => ({
                           label: `T${idx + 1}`,
-                          a: ws.pctOriginal,
-                          b: ws.pctCurrent,
-                          meta: `${ws.done} buổi · ${ws.weekStart}`
+                          a: week.pctOriginal || 0,
+                          b: week.pctCurrent || 0,
+                          meta: `${week.validDone}/${week.plannedCurrent} buổi · ${week.weekStart}`
                         }))}
                         onSelect={(i) => {
                           setDetailKind('week');
-                          setDetailFilter(weeklySummaries[i].weekStart);
+                          setDetailFilter(computedMetrics.strictWeeklyCompletion.filter((week) => week.pctOriginal != null)[i].weekStart);
                         }}
                       />
                     </div>

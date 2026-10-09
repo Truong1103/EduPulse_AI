@@ -10,9 +10,10 @@ export const DualLineChart: React.FC<{
   seriesA: string;
   seriesB: string;
   points: SeriesPoint[];
+  unitLabel?: string;
   onSelect?: (index: number) => void;
   empty?: React.ReactNode;
-}> = ({ title, caption, seriesA, seriesB, points, onSelect, empty }) => {
+}> = ({ title, caption, seriesA, seriesB, points, unitLabel = '% hoàn thành buổi đã lên lịch', onSelect, empty }) => {
   const [hover, setHover] = useState<number | null>(null);
   if (!points.length) return <>{empty}</>;
   const w = 560;
@@ -64,7 +65,7 @@ export const DualLineChart: React.FC<{
       <div className="flex gap-4 text-[11px] font-semibold">
         <span className="flex items-center gap-1 text-slate-500"><span className="inline-block w-4 border-t-2 border-dashed border-slate-400" />  {seriesA}</span>
         <span className="flex items-center gap-1 text-sky-700"><span className="inline-block w-4 border-t-2 border-sky-500" />  {seriesB}</span>
-        <span className="text-slate-400 font-normal">Đơn vị: % hoàn thành buổi đã lên lịch</span>
+        <span className="text-slate-400 font-normal">Đơn vị: {unitLabel}</span>
       </div>
       {hover != null && points[hover] && (
         <div className="text-xs bg-sky-50 border border-sky-200 rounded-xl px-3 py-2 flex items-center justify-between">
@@ -72,6 +73,75 @@ export const DualLineChart: React.FC<{
           {onSelect && <button type="button" className="ml-2 underline text-sky-700 cursor-pointer font-semibold" onClick={() => onSelect(hover)}>Mở nhật ký tuần →</button>}
         </div>
       )}
+    </div>
+  );
+};
+
+export const FrequencyHistogram: React.FC<{
+  title: string;
+  rows: { label: string; count: number }[];
+  denominator: number;
+  xAxisLabel: string;
+  maskSmallCells?: boolean;
+}> = ({ title, rows, denominator, xAxisLabel, maskSmallCells = false }) => {
+  const suppressed = maskSmallCells && rows.some((row) => row.count > 0 && row.count < 5);
+  const maximum = Math.max(1, ...rows.map((row) => row.count));
+  const tick = Math.max(1, Math.ceil(maximum / 4));
+  const yMaximum = tick * 4;
+  const width = 560;
+  const height = 240;
+  const padding = { top: 20, right: 16, bottom: 64, left: 42 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const slotWidth = rows.length ? plotWidth / rows.length : plotWidth;
+  const barWidth = Math.min(44, slotWidth * 0.62);
+
+  if (suppressed) {
+    return <p className="rounded-lg bg-slate-50 px-3 py-4 text-xs text-slate-500">Ẩn toàn bộ phân bố vì có ô N &lt; 5.</p>;
+  }
+  if (!rows.length || denominator <= 0) {
+    return <p className="rounded-lg bg-slate-50 px-3 py-4 text-xs text-slate-500">Chưa có dữ liệu hợp lệ để vẽ.</p>;
+  }
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-[10px] text-slate-500">
+        <h4 className="font-semibold">{title}</h4>
+        <span>N={denominator}</span>
+      </div>
+      <div className="overflow-x-auto">
+        <svg role="img" aria-label={title} viewBox={`0 0 ${width} ${height}`} className="h-52 w-full min-w-[360px]">
+          {[0, 1, 2, 3, 4].map((step) => {
+            const value = step * tick;
+            const y = padding.top + plotHeight - (value / yMaximum) * plotHeight;
+            return (
+              <g key={step}>
+                <line x1={padding.left} x2={width - padding.right} y1={y} y2={y} stroke="#e2e8f0" strokeDasharray={step === 0 ? undefined : '3 3'} />
+                <text x={padding.left - 8} y={y + 3} textAnchor="end" fill="#64748b" fontSize="9">{value}</text>
+              </g>
+            );
+          })}
+          {rows.map((row, index) => {
+            const barHeight = (row.count / yMaximum) * plotHeight;
+            const x = padding.left + index * slotWidth + (slotWidth - barWidth) / 2;
+            const y = padding.top + plotHeight - barHeight;
+            const percentage = (row.count / denominator) * 100;
+            return (
+              <g key={row.label}>
+                <title>{`${row.label}: ${row.count} (${percentage.toFixed(1)}%), N=${denominator}`}</title>
+                <rect x={x} y={y} width={barWidth} height={barHeight} rx="3" fill="#0f766e" />
+                <text x={x + barWidth / 2} y={Math.max(padding.top - 4, y - 5)} textAnchor="middle" fill="#0f172a" fontSize="10" fontWeight="700">{row.count}</text>
+                <text x={x + barWidth / 2} y={height - 38} textAnchor="middle" fill="#475569" fontSize="9">{row.label}</text>
+                <text x={x + barWidth / 2} y={height - 20} textAnchor="middle" fill="#64748b" fontSize="8">{percentage.toFixed(0)}%</text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      <div className="flex justify-between text-[10px] text-slate-500">
+        <span>{xAxisLabel}</span>
+        <span>Trục dọc: tần số</span>
+      </div>
     </div>
   );
 };

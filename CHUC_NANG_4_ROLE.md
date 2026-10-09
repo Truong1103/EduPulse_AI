@@ -3,14 +3,30 @@
 ## Xác thực, điều hướng và trang công khai
 
 ### Đăng nhập và tạo tài khoản
-- Dùng nghiên cứu lâu dài nên chuyển sang dùng login google tiện nhanh.
+- **Khuyến nghị của dự án:** với nghiên cứu dài hạn nên ưu tiên đăng nhập Google cho nhanh và thống nhất danh tính.
+- **Source hiện tại:** có cả Google OAuth và email/mật khẩu; trang login cho chuyển giữa chế độ đăng nhập và tạo tài khoản bằng email/mật khẩu.
+- Google OAuth khôi phục session sau callback, nạp profile từ Supabase và chuyển người dùng tới dashboard theo role.
+- Email đăng ký có thể cần xác nhận từ hộp thư; nếu Supabase chưa cấp session, UI hướng dẫn xác nhận email rồi đăng nhập lại.
+- Profile/role lấy từ allowlist nếu email được mời; người dùng chưa có invite mặc định là Student. Profile/contact được đồng bộ qua `ensure_own_profile`.
+
+### Điều hướng và bảo vệ route
+- Navbar có Trang chủ, Tính năng, Cách hoạt động, Về dự án; hiển thị nút đăng nhập khi chưa có session.
+- Sau đăng nhập, navbar hiển thị tài khoản/role, nút vào bàn làm việc và đăng xuất; Admin có lối tắt về bảng quản trị; menu có phiên bản mobile.
+- `RoleGate` chặn dashboard nếu chưa đăng nhập hoặc role hiện tại không được phép; có nút tới trang đăng nhập/bàn làm việc đúng role.
+- Session được Supabase lưu và tự refresh; logout kết thúc session, xóa profile cache ở client.
+- Toast và nút cuộn lên đầu dùng chung cho toàn ứng dụng.
+
+### Đăng ký mục tiêu (onboarding)
+- Route `register` là wizard 3 bước riêng: chọn 1 trong 5 lĩnh vực (học thuật, ngoại ngữ, thể thao, nghệ thuật, kỹ năng), đặt tên mục tiêu, chọn 1–5 buổi/tuần và thời lượng 20/30/45/60 phút, xem tóm tắt rồi hoàn tất.
+- Wizard có nút quay lại/tiếp tục và đường dẫn sang đăng nhập nếu đã có tài khoản.
+- **Giới hạn hiện tại:** callback hoàn tất trong `App.tsx` chỉ hiển thị toast và chuyển sang Student; mục tiêu từ wizard chưa được ghi vào Supabase. Tạo mục tiêu thật hiện thực hiện ở tab Student → Kế hoạch.
+- Chưa thấy form quên mật khẩu hoặc nút gửi lại email xác nhận trong source hiện tại.
 
 ### Trang công khai
 - **Trang chủ:** landing gồm giới thiệu, lĩnh vực mục tiêu, hành trình học sinh, phát hiện sớm, tình huống hỗ trợ, cách hoạt động, quyền riêng tư và CTA.
 - **Tính năng:** giới thiệu các nhóm tính năng của EduPulse.
 - **Cách hoạt động:** trình bày quy trình từ mục tiêu, lịch, nhật ký, theo dõi tới hỗ trợ.
 - **Về dự án:** vấn đề, ý tưởng và cam kết đạo đức AI.
-- **Đăng ký mục tiêu (route `register`):** wizard 3 bước chọn lĩnh vực, tên mục tiêu, số buổi/tuần, thời lượng và xem tóm tắt trước khi hoàn tất.
 
 ## 1. Student — Không gian rèn luyện
 
@@ -219,5 +235,5 @@
 - Model được mô tả là huấn luyện offline; dashboard hiện xem/khóa version và yêu cầu mở test set, không huấn luyện model trực tiếp.
 - P‑R curve chưa tính được nếu không có prediction scores và ground-truth labels theo từng mẫu.
 - Mô phỏng nằm ngoài production; thao tác với schema `sim` hiện cần script SQL riêng.
-- Wizard onboarding ở route `register` chưa persist goal; chưa có quên mật khẩu/resend email confirmation.
+- Wizard onboarding ở route `register` chưa persist goal; chưa có quên mật khẩu/resend email confirmation. Đăng nhập email/mật khẩu vẫn có trong source dù Google là lựa chọn phù hợp hơn cho nghiên cứu dài hạn.
 - Các policy/RPC/view mới nằm trong [migration `20261008000003_role_data_rls.sql`](supabase/migrations/20261008000003_role_data_rls.sql). Cần áp dụng migration lên Supabase để các kiểm soát/RPC mới có hiệu lực ở DB thật.

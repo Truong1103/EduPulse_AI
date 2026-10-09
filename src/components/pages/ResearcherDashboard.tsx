@@ -15,13 +15,14 @@ import {
   AlertTriangle,
   TrendingUp,
   Percent,
+  Printer,
   Clock,
   ChevronRight,
   Sliders,
   Sparkles,
   AlertCircle
 } from 'lucide-react';
-import { OperationalDefinition, ModelVersion } from '../../types';
+import { OperationalDefinition, ModelVersion, ConfirmedStudyOutcome, ResearchAnalysisSnapshot, ResearchSupportAndPredictionSummary } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
 import { RoleWorkspace } from '../common/RoleWorkspace';
 import {
@@ -39,11 +40,16 @@ import {
   getResearchReportConfig,
   saveResearchReportConfig,
   lockModelVersion,
-  getAnonymizedWeeklyBars
+  getAnonymizedWeeklyBars,
+  getConfirmedStudyOutcomes,
+  getResearchAnalysisSnapshots,
+  saveResearchAnalysisSnapshot,
+  getResearchSupportAndPredictionSummary
 } from '../../services/api';
 import { DualPlanBars, EmptyHint } from '../common/StudyChrome';
-import { DualLineChart, GroupedBars, ConfidenceBar, PrecisionRecallCurve } from '../common/StudyCharts';
+import { DualLineChart, GroupedBars, ConfidenceBar, FrequencyHistogram, PrecisionRecallCurve } from '../common/StudyCharts';
 import { DetailSheet } from '../common/DetailSheet';
+import { calculateTwoProportionSampleSize, summarizeConfirmedDropouts } from '../../utils/statistics';
 
 interface ResearcherDashboardProps {
   onAddToast: (title: string, message: string, type?: 'success' | 'info' | 'warning') => void;
@@ -70,6 +76,10 @@ export const ResearcherDashboard: React.FC<ResearcherDashboardProps> = ({ onAddT
   const [efficacyMetrics, setEfficacyMetrics] = useState<any>(null);
   const [weekBars, setWeekBars] = useState<{ weekStart: string; n: number; pctOriginal: number; pctCurrent: number; done: number }[]>([]);
   const [researchLogs, setResearchLogs] = useState<any[]>([]);
+  const [confirmedOutcomes, setConfirmedOutcomes] = useState<ConfirmedStudyOutcome[]>([]);
+  const [analysisSnapshots, setAnalysisSnapshots] = useState<ResearchAnalysisSnapshot[]>([]);
+  const [supportPredictionSummary, setSupportPredictionSummary] = useState<ResearchSupportAndPredictionSummary | null>(null);
+  const [snapshotSaving, setSnapshotSaving] = useState(false);
   const [resultDrill, setResultDrill] = useState<null | 'students' | 'logs'>(null);
 
   // Efficacy calculation configuration states (Mục 3.1 & 3.2 Đề cương)
@@ -78,6 +88,11 @@ export const ResearcherDashboard: React.FC<ResearcherDashboardProps> = ({ onAddT
   const [retentionTargetPct, setRetentionTargetPct] = useState<number | undefined>(undefined);
   const [minSampleSize, setMinSampleSize] = useState<number | undefined>(undefined);
   const [minRetentionDiff, setMinRetentionDiff] = useState<number>(15); // Minimum clinically meaningful difference (%)
+  const [controlDropoutPct, setControlDropoutPct] = useState<number | undefined>(undefined);
+  const [minimumDropoutReductionPct, setMinimumDropoutReductionPct] = useState<number | undefined>(undefined);
+  const [expectedLossPct, setExpectedLossPct] = useState<number | undefined>(undefined);
+  const [sampleAlpha, setSampleAlpha] = useState<0.01 | 0.05>(0.05);
+  const [samplePower, setSamplePower] = useState<0.8 | 0.9>(0.8);
 
   // Modal Unlock
   const [unlockReason, setUnlockReason] = useState('');
@@ -93,14 +108,17 @@ export const ResearcherDashboard: React.FC<ResearcherDashboardProps> = ({ onAddT
     setLoading(true);
     setLoadError(null);
     try {
-      const [defData, mvData, misData, stData, barData, logRows, reportConfig] = await Promise.all([
+      const [defData, mvData, misData, stData, barData, logRows, reportConfig, confirmedRows, snapshotRows, supportStats] = await Promise.all([
         getDefinitions(),
         getModelVersions(),
         getMissingAnalysis(),
         getResearchStudents(),
         getAnonymizedWeeklyBars(),
         getResearchLogs(),
-        getResearchReportConfig()
+        getResearchReportConfig(),
+        getConfirmedStudyOutcomes(),
+        getResearchAnalysisSnapshots(),
+        getResearchSupportAndPredictionSummary()
       ]);
       const activeModelRow = mvData.find((model) => model.active) || mvData[0];
       const accessRequest = activeModelRow?.id ? await getTestSetAccess(activeModelRow.id) : null;
@@ -112,6 +130,9 @@ export const ResearcherDashboard: React.FC<ResearcherDashboardProps> = ({ onAddT
       setTestSetRequested(Boolean(accessRequest));
       setWeekBars(barData);
       setResearchLogs(logRows);
+      setConfirmedOutcomes(confirmedRows);
+      setAnalysisSnapshots(snapshotRows);
+      setSupportPredictionSummary(supportStats);
       setRetentionThresholdPct(reportConfig?.retention_threshold_pct ?? undefined);
       setPrimaryDenominatorType(reportConfig?.primary_denominator_type || '');
       setRetentionTargetPct(reportConfig?.retention_target_pct ?? undefined);
@@ -259,9 +280,24 @@ export const ResearcherDashboard: React.FC<ResearcherDashboardProps> = ({ onAddT
     }
   };
 
+  const confirmedDropoutSummary = summarizeConfirmedDropouts(confirmedOutcomes);
+  const dropoutIntervention = confirmedDropoutSummary.arms.intervention;
+  const dropoutControl = confirmedDropoutSummary.arms.control;
+  const dropoutNTotal = dropoutIntervention.randomized + dropoutControl.randomized;
+  const suppressDropoutGroups = dropoutIntervention.randomized < 5 || dropoutControl.randomized < 5;
+
   const handleExportCSV = async (datasetType: string) => {
     try {
-      const data = await exportResearchDataset(researcherId, { format: 'csv' });
+      const data = await exportResearchDataset(researcherId, {
+        format: 'csv',
+        datasetType: datasetType === 'confirmed_outcomes'
+          ? 'confirmed_outcomes'
+          : datasetType === 'primary_summary'
+            ? 'primary_summary'
+            : datasetType === 'students'
+              ? 'students'
+              : 'logs'
+      });
       let csvContent = '';
       let filename = 'edupulse_export.csv';
       const csvCell = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
@@ -279,6 +315,52 @@ export const ResearcherDashboard: React.FC<ResearcherDashboardProps> = ({ onAddT
             row.difficulty,
             row.barrier
           ].map(csvCell).join(','))
+        ].join('\r\n');
+      } else if (datasetType === 'confirmed_outcomes') {
+        filename = 'edupulse_confirmed_outcomes.csv';
+        csvContent = [
+          ['Mã HS giả danh', 'Nhóm', 'Trạng thái consent', 'Ngày phân nhóm', 'Nguồn mốc phân nhóm', 'Đến hạn 8 tuần', 'Follow-up hoàn tất', 'Outcome xác nhận', 'Ngày hiệu lực', 'Tuần', 'Vai trò xác nhận', 'Phiên bản định nghĩa'].map(csvCell).join(','),
+          ...data.confirmedOutcomes.map((row: any) => [
+            row.student_code,
+            row.arm,
+            row.consent_state,
+            row.assigned_at,
+            row.assignment_date_source,
+            row.follow_up_due,
+            row.follow_up_complete,
+            row.outcome,
+            row.effective_date,
+            row.week_start,
+            row.confirmer_role,
+            row.definition_version
+          ].map(csvCell).join(','))
+        ].join('\r\n');
+      } else if (datasetType === 'primary_summary') {
+        filename = 'edupulse_primary_dropout_summary.csv';
+        const comparison = suppressDropoutGroups ? null : confirmedDropoutSummary.comparison;
+        const arms = [confirmedDropoutSummary.arms.intervention, confirmedDropoutSummary.arms.control];
+        csvContent = [
+          ['Nhóm', 'N phân nhóm', 'Dropout xác nhận', 'Outcome đã biết', 'Follow-up chưa đủ 8 tuần', 'Đủ 8 tuần chưa rõ outcome', 'Mốc phân nhóm không ghi trực tiếp', 'Withdrawal', 'Consent thiếu', 'Tỷ lệ xác nhận tối thiểu (%)', 'Cận nhạy cảm tối đa (%)', 'CI95 Risk Difference dưới (%)', 'CI95 Risk Difference trên (%)', 'Kiểm định', 'p-value'].map(csvCell).join(','),
+          ...arms.map((arm) => {
+            const suppressed = arm.randomized > 0 && arm.randomized < 5;
+            return [
+              arm.arm,
+              suppressed ? '<5' : arm.randomized,
+              suppressed ? 'Ẩn do N<5' : arm.confirmedDropouts,
+              suppressed ? 'Ẩn do N<5' : arm.knownOutcomes,
+              suppressed ? 'Ẩn do N<5' : arm.followUpNotDue,
+              suppressed ? 'Ẩn do N<5' : arm.missingFinalOutcome,
+              suppressed ? 'Ẩn do N<5' : arm.assignmentDateUnknown,
+              suppressed ? 'Ẩn do N<5' : arm.withdrawn,
+              suppressed ? 'Ẩn do N<5' : arm.consentMissing,
+              suppressed ? 'Ẩn do N<5' : arm.sensitivityLowerPct,
+              suppressed ? 'Ẩn do N<5' : arm.sensitivityUpperPct,
+              comparison ? comparison.ciLower * 100 : '',
+              comparison ? comparison.ciUpper * 100 : '',
+              comparison?.test || '',
+              comparison?.pValue ?? ''
+            ].map(csvCell).join(',');
+          })
         ].join('\r\n');
       } else {
         filename = 'edupulse_research_students.csv';
@@ -332,6 +414,55 @@ export const ResearcherDashboard: React.FC<ResearcherDashboardProps> = ({ onAddT
   );
 
   const panelShell = 'bg-white rounded-3xl border border-slate-200/90 shadow-sm';
+  const sampleSizePlan = controlDropoutPct != null && minimumDropoutReductionPct != null && expectedLossPct != null
+    ? calculateTwoProportionSampleSize({
+      controlDropoutPct,
+      minimumReductionPct: minimumDropoutReductionPct,
+      alpha: sampleAlpha,
+      power: samplePower,
+      expectedLossPct
+    })
+    : null;
+
+  const handleSaveAnalysisSnapshot = async () => {
+    if (!efficacyMetrics) {
+      onAddToast('Chưa có kết quả', 'Cần tải xong số liệu trước khi lưu snapshot.', 'warning');
+      return;
+    }
+    setSnapshotSaving(true);
+    try {
+      await saveResearchAnalysisSnapshot({
+        outcome: 'dropout_confirmed',
+        followupWeeks: 8,
+        primaryDenominator: 'all_randomized',
+        sampleSizeAssumptions: {
+          controlDropoutPct,
+          minimumDropoutReductionPct,
+          alpha: sampleAlpha,
+          power: samplePower,
+          expectedLossPct,
+          estimatedTotalN: sampleSizePlan?.totalAfterLoss
+        },
+        reportConfig: {
+          retentionThresholdPct,
+          primaryDenominatorType,
+          retentionTargetPct,
+          minSampleSize,
+          minRetentionDiff
+        }
+      }, {
+        confirmedDropouts: confirmedDropoutSummary,
+        secondaryRetention: efficacyMetrics,
+        supportBeforeAfterAndTestPredictions: supportPredictionSummary
+      });
+      setAnalysisSnapshots(await getResearchAnalysisSnapshots());
+      onAddToast('Đã lưu snapshot', 'Cấu hình, outcome và kết quả đã được lưu kèm audit log.', 'success');
+    } catch (err) {
+      onAddToast('Lỗi lưu snapshot', err instanceof Error ? err.message : 'Không lưu được snapshot.', 'warning');
+    } finally {
+      setSnapshotSaving(false);
+    }
+  };
 
   return (
     <RoleWorkspace
@@ -371,7 +502,7 @@ export const ResearcherDashboard: React.FC<ResearcherDashboardProps> = ({ onAddT
             <span className="text-2xl font-black text-violet-700">{(effIntervention?.activeStudents || 0) + (effControl?.activeStudents || 0)}</span>
           </div>
           <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200/60">
-            <span className="text-[11px] font-bold text-slate-500 uppercase block">Δ duy trì</span>
+            <span className="text-[11px] font-bold text-slate-500 uppercase block">Δ retention phụ</span>
             <span className="text-lg font-black text-emerald-700">{defsReady && effDiff ? `${effDiff.riskDifferencePct}%` : '—'}</span>
           </div>
           <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200/60">
@@ -397,13 +528,189 @@ export const ResearcherDashboard: React.FC<ResearcherDashboardProps> = ({ onAddT
         {/* TAB 1: BÁO CÁO HIỆU QUẢ CAN THIỆP (X, Y, Z, T THEO MỤC 3.1 & 3.2) */}
         {activeTab === 'outcomes' && (
           <div className="space-y-6">
-            {/* Thanh cấu hình đo lường hiệu quả (Mục 3.1 & 3.2) */}
+            <div className={`${panelShell} p-5 sm:p-7 space-y-4`}>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900">Outcome chính: bỏ cuộc đã xác nhận ở tuần 8</h2>
+                  <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-600">
+                    Mẫu số là toàn bộ học sinh đã phân nhóm. Withdrawal, thiếu consent và outcome chưa rõ được báo riêng; không tự gán là duy trì hoặc bỏ cuộc.
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  <button type="button" onClick={() => window.print()} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">
+                    <Printer className="h-4 w-4" /> In / PDF
+                  </button>
+                  <button type="button" onClick={handleSaveAnalysisSnapshot} disabled={snapshotSaving || !efficacyMetrics} className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-700 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-800 disabled:cursor-wait disabled:opacity-50">
+                    <FileText className="h-4 w-4" />
+                    {snapshotSaving ? 'Đang lưu…' : 'Lưu snapshot'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                {[dropoutIntervention, dropoutControl].map((arm) => {
+                  const isSmall = arm.randomized > 0 && arm.randomized < 5;
+                  const lower = arm.sensitivityLowerPct;
+                  const upper = arm.sensitivityUpperPct;
+                  return (
+                    <div key={arm.arm} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <h3 className="text-sm font-bold text-slate-900">{arm.arm === 'intervention' ? 'Can thiệp' : 'Đối chứng'}</h3>
+                        <span className="text-xs font-semibold text-slate-500">{isSmall ? 'N < 5' : `N phân nhóm = ${arm.randomized}`}</span>
+                      </div>
+                      <p className="mt-3 text-2xl font-extrabold tabular-nums text-slate-900">
+                        {isSmall ? 'Ẩn do N < 5' : arm.randomized === 0 ? '—' : lower == null || upper == null ? '—' : Math.abs(upper - lower) < 0.05 ? `${lower.toFixed(1)}%` : `${lower.toFixed(1)}–${upper.toFixed(1)}%`}
+                      </p>
+                      <p className="text-[11px] text-slate-500">{isSmall ? 'Tỷ lệ bị ẩn do cỡ nhóm nhỏ.' : 'Tỷ lệ xác nhận tối thiểu – cận trên giả định các outcome chưa rõ/withdrawal đều là dropout.'}</p>
+                      {!isSmall && arm.confirmedRateCI95 && <p className="mt-1 text-[11px] text-slate-500">Wilson CI 95%: [{arm.confirmedRateCI95[0].toFixed(1)}%, {arm.confirmedRateCI95[1].toFixed(1)}%]</p>}
+                      <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 border-t border-slate-200 pt-3 text-[11px] text-slate-600">
+                        <span>Dropout xác nhận</span><strong className="text-right">{isSmall ? 'Ẩn' : arm.confirmedDropouts}</strong>
+                        <span>Outcome đã biết</span><strong className="text-right">{isSmall ? 'Ẩn' : arm.knownOutcomes}</strong>
+                        <span>Follow-up chưa đủ 8 tuần</span><strong className="text-right">{isSmall ? 'Ẩn' : arm.followUpNotDue}</strong>
+                        <span>Đủ 8 tuần, chưa rõ outcome</span><strong className="text-right">{isSmall ? 'Ẩn' : arm.missingFinalOutcome}</strong>
+                        <span>Mốc phân nhóm backfill/proxy</span><strong className="text-right">{isSmall ? 'Ẩn' : arm.assignmentDateUnknown}</strong>
+                        <span>Rút consent</span><strong className="text-right">{isSmall ? 'Ẩn' : arm.withdrawn}</strong>
+                        <span>Thiếu bản ghi consent</span><strong className="text-right">{isSmall ? 'Ẩn' : arm.consentMissing}</strong>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="rounded-xl border border-slate-200 p-4">
+                {!suppressDropoutGroups && confirmedDropoutSummary.comparison ? (
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <div><p className="text-[11px] font-bold uppercase text-slate-500">Risk difference</p><p className="mt-1 text-xl font-extrabold text-slate-900">{(confirmedDropoutSummary.comparison.difference * 100).toFixed(1)}%</p></div>
+                    <div><p className="text-[11px] font-bold uppercase text-slate-500">Khoảng tin cậy 95% · Newcombe</p><p className="mt-1 text-sm font-bold text-slate-900">[{(confirmedDropoutSummary.comparison.ciLower * 100).toFixed(1)}%, {(confirmedDropoutSummary.comparison.ciUpper * 100).toFixed(1)}%]</p></div>
+                    <div><p className="text-[11px] font-bold uppercase text-slate-500">Kiểm định hai phía</p><p className="mt-1 text-sm font-bold text-slate-900">{confirmedDropoutSummary.comparison.test === 'fisher_exact' ? 'Fisher exact' : 'Pearson chi-square'} · p = {confirmedDropoutSummary.comparison.pValue.toFixed(4)}</p></div>
+                  </div>
+                ) : (
+                  <div>
+                    <p className="text-sm font-bold text-amber-900">Chưa chạy kiểm định outcome chính</p>
+                    <p className="mt-1 text-xs text-amber-800">
+                      {suppressDropoutGroups
+                        ? 'Cần ít nhất N = 5 mỗi nhóm để hiển thị ước lượng và kiểm định.'
+                        : confirmedDropoutSummary.comparisonStatus === 'insufficient_groups'
+                        ? 'Cần có học sinh ở cả hai nhóm đã phân nhóm.'
+                        : 'Còn outcome chưa rõ hoặc withdrawal; kết quả inferential bị giữ lại cho đến khi dữ liệu được xác nhận.'}
+                    </p>
+                    {!suppressDropoutGroups && confirmedDropoutSummary.sensitivityDifferencePct && (
+                      <p className="mt-2 text-xs text-slate-600">Khoảng nhạy cảm của chênh lệch khi các trường hợp chưa rõ/withdrawal được lần lượt xem là không/có dropout: [{confirmedDropoutSummary.sensitivityDifferencePct[0].toFixed(1)}%, {confirmedDropoutSummary.sensitivityDifferencePct[1].toFixed(1)}%]. Đây không phải CI.</p>
+                    )}
+                  </div>
+                )}
+                {!suppressDropoutGroups && confirmedDropoutSummary.comparison && <p className="mt-3 text-[11px] text-slate-500">Risk difference = p(dropout | can thiệp) − p(dropout | đối chứng); giá trị âm nghĩa là tỷ lệ dropout quan sát ở nhóm can thiệp thấp hơn.</p>}
+                {minSampleSize == null || dropoutNTotal < minSampleSize ? (
+                  <p className="mt-3 border-t border-slate-100 pt-3 text-[11px] font-semibold text-amber-800">{minSampleSize == null ? 'Chưa cấu hình ngưỡng cỡ mẫu tối thiểu; mọi kiểm định chỉ nên xem là thăm dò.' : `N=${dropoutNTotal}, thấp hơn ngưỡng tối thiểu đã cấu hình (${minSampleSize}); không kết luận hiệu quả.`}</p>
+                ) : null}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
+                <div className="text-[11px] text-slate-500">Snapshot gần nhất: {analysisSnapshots[0] ? `${new Date(analysisSnapshots[0].createdAt).toLocaleString('vi-VN')} · ${analysisSnapshots[0].analysisVersion}` : 'Chưa có'}</div>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={() => handleExportCSV('primary_summary')} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                    <Download className="h-3.5 w-3.5" /> Xuất bảng aggregate
+                  </button>
+                  <button type="button" onClick={() => handleExportCSV('confirmed_outcomes')} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                    <Download className="h-3.5 w-3.5" /> Xuất outcome CSV
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <section className={`${panelShell} p-5 sm:p-6 space-y-4`}>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Ước lượng cỡ mẫu cho dropout</h3>
+                <p className="mt-1 text-[11px] text-slate-500">Hai tỷ lệ độc lập, phân nhóm 1:1, kiểm định hai phía; gần đúng chuẩn và cần giáo viên/người hỗ trợ thống kê duyệt giả định.</p>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                <label className="grid gap-1 text-[11px] font-semibold text-slate-600">Dropout nền nhóm đối chứng (%)
+                  <input type="number" min={1} max={99} value={controlDropoutPct ?? ''} onChange={(event) => setControlDropoutPct(event.target.value === '' ? undefined : Number(event.target.value))} className="rounded-lg border border-slate-200 px-3 py-2 text-xs" />
+                </label>
+                <label className="grid gap-1 text-[11px] font-semibold text-slate-600">Mức giảm tối thiểu (điểm %)
+                  <input type="number" min={1} max={99} value={minimumDropoutReductionPct ?? ''} onChange={(event) => setMinimumDropoutReductionPct(event.target.value === '' ? undefined : Number(event.target.value))} className="rounded-lg border border-slate-200 px-3 py-2 text-xs" />
+                </label>
+                <label className="grid gap-1 text-[11px] font-semibold text-slate-600">Mất theo dõi dự kiến (%)
+                  <input type="number" min={0} max={80} value={expectedLossPct ?? ''} onChange={(event) => setExpectedLossPct(event.target.value === '' ? undefined : Number(event.target.value))} className="rounded-lg border border-slate-200 px-3 py-2 text-xs" />
+                </label>
+                <label className="grid gap-1 text-[11px] font-semibold text-slate-600">Alpha hai phía
+                  <select value={sampleAlpha} onChange={(event) => setSampleAlpha(Number(event.target.value) as 0.01 | 0.05)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs"><option value={0.05}>0,05</option><option value={0.01}>0,01</option></select>
+                </label>
+                <label className="grid gap-1 text-[11px] font-semibold text-slate-600">Power
+                  <select value={samplePower} onChange={(event) => setSamplePower(Number(event.target.value) as 0.8 | 0.9)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs"><option value={0.8}>80%</option><option value={0.9}>90%</option></select>
+                </label>
+              </div>
+              <div className="flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                {sampleSizePlan ? (
+                  <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs">
+                    <span>Trước mất theo dõi: <strong>{sampleSizePlan.uninflatedPerArm}/nhóm</strong></span>
+                    <span>Sau điều chỉnh: <strong>{sampleSizePlan.perArmAfterLoss}/nhóm</strong></span>
+                    <span>Tổng mục tiêu: <strong className="text-emerald-800">N={sampleSizePlan.totalAfterLoss}</strong></span>
+                  </div>
+                ) : <p className="text-xs text-slate-500">Nhập tỷ lệ nền, mức giảm nhỏ nhất có ý nghĩa và mất theo dõi để tính.</p>}
+                <button type="button" disabled={!sampleSizePlan} onClick={() => sampleSizePlan && setMinSampleSize(sampleSizePlan.totalAfterLoss)} className="rounded-lg bg-sky-100 px-3 py-2 text-xs font-bold text-sky-800 hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-50">Dùng tổng N làm ngưỡng</button>
+              </div>
+            </section>
+
+            <section className={`${panelShell} p-5 sm:p-6 space-y-4`}>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Theo dõi hỗ trợ và dự đoán AI</h3>
+                <p className="mt-1 text-[11px] leading-relaxed text-slate-500">Trước–sau là mô tả ghép cặp cùng học sinh quanh lời mời hỗ trợ đầu tiên, không chứng minh tác động nhân quả. Xác suất là đầu ra model trên tập test đã khóa/mở, không phải outcome thực tế.</p>
+              </div>
+              {supportPredictionSummary ? (
+                <>
+                  <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4"><p className="text-[10px] font-bold uppercase text-slate-500">Học sinh nhận hỗ trợ</p><p className="mt-1 text-2xl font-extrabold">{supportPredictionSummary.support.supportedStudents}</p><p className="text-[10px] text-slate-500">{supportPredictionSummary.support.totalInvites} lời mời</p></div>
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4"><p className="text-[10px] font-bold uppercase text-emerald-800">Đã chấp nhận</p><p className="mt-1 text-2xl font-extrabold">{supportPredictionSummary.support.acceptedInvites}</p><p className="text-[10px] text-slate-500">{supportPredictionSummary.support.totalInvites ? `${(supportPredictionSummary.support.acceptedInvites / supportPredictionSummary.support.totalInvites * 100).toFixed(1)}% lời mời` : 'Chưa có lời mời'}</p></div>
+                    <div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-[10px] font-bold uppercase text-slate-500">Có cặp trước–sau</p><p className="mt-1 text-2xl font-extrabold">N={supportPredictionSummary.pairedCompletion.n}</p><p className="text-[10px] text-slate-500">Đủ tuần baseline và follow-up</p></div>
+                    <div className="rounded-xl border border-sky-200 bg-sky-50 p-4"><p className="text-[10px] font-bold uppercase text-sky-800">Model scores vận hành</p><p className="mt-1 text-2xl font-extrabold">{supportPredictionSummary.modelPredictions.predictionRows}</p><p className="text-[10px] text-slate-500">{supportPredictionSummary.modelPredictions.students} học sinh · đã ẩn danh</p></div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                    <div className="rounded-xl border border-slate-200 p-4">
+                      <h4 className="text-sm font-bold text-slate-900">Completion trước/sau lời mời hỗ trợ</h4>
+                      {supportPredictionSummary.pairedCompletion.n > 0 ? (
+                        <>
+                          <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                            <div><p className="text-[10px] text-slate-500">Trước · mean</p><p className="font-bold">{supportPredictionSummary.pairedCompletion.meanBeforePct?.toFixed(1)}%</p></div>
+                            <div><p className="text-[10px] text-slate-500">Sau · mean</p><p className="font-bold">{supportPredictionSummary.pairedCompletion.meanAfterPct?.toFixed(1)}%</p></div>
+                            <div><p className="text-[10px] text-slate-500">Median Δ</p><p className="font-bold">{supportPredictionSummary.pairedCompletion.medianChangePp == null ? '—' : `${supportPredictionSummary.pairedCompletion.medianChangePp > 0 ? '+' : ''}${supportPredictionSummary.pairedCompletion.medianChangePp.toFixed(1)} điểm %`}</p></div>
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2 text-[10px]">
+                            <span className="rounded-md bg-emerald-50 px-2 py-1 text-emerald-800">Cải thiện {supportPredictionSummary.pairedCompletion.improvedN}</span>
+                            <span className="rounded-md bg-slate-100 px-2 py-1 text-slate-700">Không đổi {supportPredictionSummary.pairedCompletion.unchangedN}</span>
+                            <span className="rounded-md bg-amber-50 px-2 py-1 text-amber-900">Giảm {supportPredictionSummary.pairedCompletion.declinedN}</span>
+                          </div>
+                        </>
+                      ) : <p className="mt-3 text-xs text-slate-500">Chưa đủ dữ liệu cặp: cần một tuần hợp lệ trước và một tuần hợp lệ sau lời mời hỗ trợ.</p>}
+                      <p className="mt-3 text-[10px] text-slate-500">Chỉ số dùng weekly_summary; tuần nghỉ, không có plan hoặc thiếu một phía được loại. Kết quả trước–sau chịu ảnh hưởng chọn mẫu và không phải ước lượng nhân quả.</p>
+                    </div>
+                    <div className="rounded-xl border border-slate-200 p-4">
+                      <h4 className="text-sm font-bold text-slate-900">Phân bố xác suất model vận hành</h4>
+                      {supportPredictionSummary.modelPredictions.predictionRows > 0 ? (
+                        <>
+                          <FrequencyHistogram
+                            title="Dải xác suất do model xuất ra"
+                            rows={supportPredictionSummary.modelPredictions.probabilityBands}
+                            denominator={supportPredictionSummary.modelPredictions.predictionRows}
+                            xAxisLabel="Xác suất model (không phải nhãn thực tế)"
+                          />
+                          <p className="mt-2 text-[10px] text-slate-500">Mean probability {supportPredictionSummary.modelPredictions.meanPredictedProbability == null ? '—' : `${(supportPredictionSummary.modelPredictions.meanPredictedProbability * 100).toFixed(1)}%`} · cờ threshold {supportPredictionSummary.modelPredictions.flaggedRows} dòng. Đây là score vận hành, chưa phải kết quả đánh giá independent test set hoặc outcome dropout.</p>
+                        </>
+                      ) : <p className="mt-3 text-xs text-slate-500">Chưa có score model hợp lệ; không dùng cờ rule làm xác suất model. Đánh giá dự đoán trên holdout cần lưu membership test-set riêng.</p>}
+                    </div>
+                  </div>
+                </>
+              ) : <p className="text-xs text-slate-500">{loadError || 'Đang tải thống kê hỗ trợ/dự đoán…'}</p>}
+            </section>
+
+            {/* Cấu hình retention là phân tích phụ; outcome chính dùng dropout xác nhận ở trên. */}
             <div className={`${panelShell} p-5 space-y-3`}>
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
                   <Sliders className="w-4 h-4 text-purple-600" />
                   <span className="text-xs font-bold text-slate-900 uppercase">
-                    Cấu hình Tham số Tính toán Hiệu quả (Tính trực tiếp từ CSDL)
+                    Phân tích phụ: cấu hình ngưỡng giữ kế hoạch (retention)
                   </span>
                 </div>
                 <span className="text-[11px] text-slate-500 font-mono">
@@ -465,7 +772,7 @@ export const ResearcherDashboard: React.FC<ResearcherDashboardProps> = ({ onAddT
                   <input
                     type="number"
                     min={5}
-                    max={200}
+                    max={10000}
                     value={minSampleSize ?? ''}
                     placeholder="Để trống"
                     onChange={(e) => setMinSampleSize(e.target.value === '' ? undefined : Number(e.target.value))}
@@ -486,7 +793,7 @@ export const ResearcherDashboard: React.FC<ResearcherDashboardProps> = ({ onAddT
                     onChange={(e) => setMinRetentionDiff(Number(e.target.value) || 15)}
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold"
                   />
-                  <p className="text-[10px] text-slate-400 mt-1">Dùng vẽ vạch chỉ tiêu trên biểu đồ CI (Risk Difference)</p>
+                  <p className="text-[10px] text-slate-400 mt-1">Dùng vẽ vạch chênh lệch retention tối thiểu trong phân tích phụ.</p>
                 </div>
               </div>
             </div>
@@ -512,18 +819,19 @@ export const ResearcherDashboard: React.FC<ResearcherDashboardProps> = ({ onAddT
 
               <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-sm">
                 <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
-                  Y - HS bị gắn cờ nguy cơ
+                  Y - HS có cờ dự đoán AI/rule
                 </span>
                 <div className="mt-2 flex items-baseline gap-2">
                   <span className="text-3xl font-extrabold text-amber-600">
                     {(effIntervention?.flaggedStudents || 0) + (effControl?.flaggedStudents || 0)}
                   </span>
-                  <span className="text-xs text-slate-500">học sinh</span>
+                  <span className="text-xs text-slate-500">ít nhất 1 lần được gắn cờ</span>
                 </div>
                 <div className="mt-3 pt-3 border-t border-slate-100 text-xs flex justify-between text-slate-600">
                   <span>Can thiệp: <strong>{effIntervention?.flaggedStudents || 0}</strong></span>
                   <span>Đối chứng: <strong>{effControl?.flaggedStudents || 0}</strong></span>
                 </div>
+                <p className="mt-2 text-[10px] leading-relaxed text-slate-500">Đây là đầu ra dự đoán theo ngưỡng model/rule, không phải dropout đã xác nhận hay xác suất học sinh chắc chắn bỏ cuộc.</p>
               </div>
 
               <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-sm">
@@ -534,7 +842,7 @@ export const ResearcherDashboard: React.FC<ResearcherDashboardProps> = ({ onAddT
                   <span className="text-3xl font-extrabold text-emerald-600">
                     {effDiff?.riskDifferencePct == null ? '—' : effDiff.riskDifferencePct >= 0 ? `+${effDiff.riskDifferencePct}%` : `${effDiff.riskDifferencePct}%`}
                   </span>
-                  <span className="text-xs text-slate-500">Risk Difference</span>
+                  <span className="text-xs text-slate-500">chênh lệch retention phụ</span>
                 </div>
                 <div className="mt-3 pt-3 border-t border-slate-100 text-xs text-slate-600">
                   <span>95% CI: [{effDiff?.ci95Lower ?? '—'}%, {effDiff?.ci95Upper ?? '—'}%]</span>
@@ -562,10 +870,10 @@ export const ResearcherDashboard: React.FC<ResearcherDashboardProps> = ({ onAddT
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
                   <h3 className="text-lg font-bold text-slate-900">
-                    Báo cáo Kết quả can thiệp theo 3 Mẫu số khoa học (Mục 3.1)
+                    Kết quả phụ: tỷ lệ giữ kế hoạch theo N_all / N_obs / N_comp
                   </h3>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Trình bày minh bạch kết quả theo chuẩn đề cương: N_all (phân nhóm ngẫu nhiên), N_obs (đang trong quan sát), N_comp (hoàn thành chu kỳ).
+                    Thống kê duy trì kế hoạch dựa trên weekly_summary; đây là kết quả phụ, không thay thế outcome bỏ cuộc đã xác nhận ở đầu báo cáo.
                   </p>
                 </div>
 
@@ -596,7 +904,7 @@ export const ResearcherDashboard: React.FC<ResearcherDashboardProps> = ({ onAddT
                       <th className="py-3 px-4">Nhóm thực nghiệm</th>
                       <th className="py-3 px-4">Tất cả phân nhóm (N_all)</th>
                       <th className="py-3 px-4">Đang quan sát (N_obs)</th>
-                      <th className="py-3 px-4">Gắn cờ AI (Y)</th>
+                      <th className="py-3 px-4">Có cờ dự đoán model/rule (Y)</th>
                       <th className="py-3 px-4">Tỷ lệ giữ kế hoạch (Z_orig)</th>
                       <th className="py-3 px-4">Tỷ lệ giữ kế hoạch (Z_curr)</th>
                     </tr>
@@ -629,20 +937,20 @@ export const ResearcherDashboard: React.FC<ResearcherDashboardProps> = ({ onAddT
               {/* Thông số kiểm định thống kê (Statistical Test Details) */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-3 border-t border-slate-100">
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/60">
-                  <span className="text-[11px] font-bold text-slate-500 uppercase block">Chênh lệch Nguy cơ (Risk Difference)</span>
+                  <span className="text-[11px] font-bold text-slate-500 uppercase block">Chênh lệch tỷ lệ retention (kết quả phụ)</span>
                   <div className="mt-1 flex items-baseline gap-2">
                     <span className="text-xl font-black text-slate-900">
                       {effDiff?.riskDifferencePct == null ? '—' : `${effDiff.riskDifferencePct}%`}
                     </span>
-                    <span className="text-xs text-slate-500">p1 - p2</span>
+                    <span className="text-xs text-slate-500">p(retention can thiệp) − p(retention đối chứng)</span>
                   </div>
                   <span className="text-[11px] text-slate-500 block mt-1">
-                    95% CI: [{effDiff?.ci95Lower ?? '—'}%, {effDiff?.ci95Upper ?? '—'}%]
+                    95% CI retention: [{effDiff?.ci95Lower ?? '—'}%, {effDiff?.ci95Upper ?? '—'}%]
                   </span>
                 </div>
 
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/60">
-                  <span className="text-[11px] font-bold text-slate-500 uppercase block">Kiểm định z-test (Two-Proportion)</span>
+                  <span className="text-[11px] font-bold text-slate-500 uppercase block">z-test retention (phân tích phụ)</span>
                   <div className="mt-1 flex items-baseline gap-2">
                     <span className="text-xl font-black text-purple-700">
                       p = {effDiff?.pValue !== undefined ? effDiff.pValue : 'N/A'}
@@ -697,7 +1005,7 @@ export const ResearcherDashboard: React.FC<ResearcherDashboardProps> = ({ onAddT
                   unit="%"
                 /> : <p className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500">Chưa có đủ mẫu số và dữ liệu tuần để tính tỷ lệ nhóm đối chứng.</p>}
                 {effDiff?.riskDifferencePct != null && effDiff.ci95Lower != null && effDiff.ci95Upper != null ? <ConfidenceBar
-                  label="Chênh lệch nguy cơ (Risk Difference = p1 − p2)"
+                  label="Chênh lệch tỷ lệ giữ kế hoạch (retention phụ)"
                   value={effDiff.riskDifferencePct}
                   ciLow={effDiff.ci95Lower}
                   ciHigh={effDiff.ci95Upper}
@@ -783,7 +1091,7 @@ export const ResearcherDashboard: React.FC<ResearcherDashboardProps> = ({ onAddT
                   rightName="Đối chứng"
                   rows={[
                     { label: 'X dùng web', left: effIntervention?.activeStudents || 0, right: effControl?.activeStudents || 0 },
-                    { label: 'Y gắn cờ', left: effIntervention?.flaggedStudents || 0, right: effControl?.flaggedStudents || 0 }
+                    { label: 'Có cờ dự đoán AI/rule', left: effIntervention?.flaggedStudents || 0, right: effControl?.flaggedStudents || 0 }
                   ]}
                 />
               </div>
@@ -1094,6 +1402,18 @@ export const ResearcherDashboard: React.FC<ResearcherDashboardProps> = ({ onAddT
                 >
                   <Download className="w-4 h-4" />
                   <span>Tải CSV nhật ký rèn luyện</span>
+                </button>
+              </div>
+
+              <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+                <h4 className="font-bold text-xs text-slate-900">3. Outcome đã xác nhận</h4>
+                <p className="text-[11px] text-slate-500">Một trạng thái mới nhất mỗi mã HS; consent withdrawal được tách khỏi outcome và không xuất ghi chú xác nhận.</p>
+                <button
+                  onClick={() => handleExportCSV('confirmed_outcomes')}
+                  className="w-full py-2.5 rounded-xl bg-emerald-100 hover:bg-emerald-200 text-emerald-800 font-bold text-xs cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Tải CSV outcome</span>
                 </button>
               </div>
             </div>

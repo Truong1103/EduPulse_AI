@@ -20,7 +20,12 @@ import {
   AuditLogEntry,
   AppRole,
   EvidenceSource,
-  MentorAssignment
+  MentorAssignment,
+  MentorStatistics,
+  MentorStudentLevelStatistics,
+  ConfirmedStudyOutcome,
+  ResearchAnalysisSnapshot,
+  ResearchSupportAndPredictionSummary
 } from '../types';
 
 // ============================================================================
@@ -361,26 +366,17 @@ export async function getWeeklySummaries(studentId: string): Promise<WeeklySumma
 }
 
 export async function confirmWeeklyStatus(
-  studentId: string,
   weekStart: string,
   status: 'training' | 'resting' | 'achieved' | 'stopped',
-  confirmedBy: 'student' | 'mentor',
   note?: string
 ) {
-  const res = await supabase
-    .from('weekly_status')
-    .upsert({
-      student_id: studentId,
-      week_start: weekStart,
-      status,
-      confirmed_by: confirmedBy,
-      note,
-      updated_at: new Date().toISOString()
-    }, {
-      onConflict: 'student_id,week_start'
-    });
-  throwIfError(res.error, 'Không lưu được trạng thái tuần.');
-  return res;
+  const { data, error } = await supabase.rpc('confirm_student_weekly_status', {
+    p_week_start: weekStart,
+    p_status: status,
+    p_note: note || null
+  });
+  throwIfError(error, 'Không lưu được trạng thái và outcome của tuần.');
+  return data;
 }
 
 export async function getWeeklyStatus(studentId: string, weekStart?: string): Promise<WeeklyStatus[]> {
@@ -580,6 +576,100 @@ export async function getMentorStudentSummaries(mentorId: string) {
   return data;
 }
 
+export async function getMentorCohortStatistics(
+  weeks: 0 | 4 | 8,
+  activityGroup: string | null = null
+): Promise<MentorStatistics> {
+  const { data, error } = await supabase.rpc('get_mentor_cohort_statistics', {
+    p_weeks: weeks,
+    p_activity_group: activityGroup
+  });
+
+  throwIfError(error, 'Không tải được thống kê cohort của Giáo viên.');
+  const row = (data || {}) as Record<string, any>;
+  const numberOrNull = (value: unknown): number | null => value == null ? null : Number(value);
+  const countDistribution = (value: unknown) => (Array.isArray(value) ? value : []).map((item: any) => ({
+    label: String(item.label),
+    count: Number(item.count || 0)
+  }));
+  const valueDistribution = (value: unknown) => (Array.isArray(value) ? value : []).map((item: any) => ({
+    value: Number(item.value),
+    count: Number(item.count || 0)
+  }));
+
+  return {
+    cohortSize: Number(row.cohort_size || 0),
+    studentsWithWeeklyData: Number(row.students_with_weekly_data || 0),
+    studentsMissingWeeklyData: Number(row.students_missing_weekly_data || 0),
+    studentsWithValidPlan: Number(row.students_with_valid_plan || 0),
+    activeStudents: Number(row.active_students || 0),
+    inactiveStudents: Number(row.inactive_students || 0),
+    participationRate: numberOrNull(row.participation_rate),
+    logCount: Number(row.log_count || 0),
+    activityMissingN: Number(row.activity_missing_n || 0),
+    activityDistribution: countDistribution(row.activity_distribution),
+    barrierN: Number(row.barrier_n || 0),
+    barrierMissingN: Number(row.barrier_missing_n || 0),
+    barrierDistribution: countDistribution(row.barrier_distribution),
+    meanCompletedSessions: numberOrNull(row.mean_completed_sessions),
+    medianCompletedSessions: numberOrNull(row.median_completed_sessions),
+    sessionCountDistribution: valueDistribution(row.session_count_distribution),
+    meanCompletionPct: numberOrNull(row.mean_completion_pct),
+    medianCompletionPct: numberOrNull(row.median_completion_pct),
+    motivationN: Number(row.motivation_n || 0),
+    motivationMissingN: Number(row.motivation_missing_n || 0),
+    motivationMean: numberOrNull(row.motivation_mean),
+    motivationMedian: numberOrNull(row.motivation_median),
+    motivationDistribution: valueDistribution(row.motivation_distribution),
+    difficultyN: Number(row.difficulty_n || 0),
+    difficultyMissingN: Number(row.difficulty_missing_n || 0),
+    difficultyMean: numberOrNull(row.difficulty_mean),
+    difficultyMedian: numberOrNull(row.difficulty_median),
+    difficultyDistribution: valueDistribution(row.difficulty_distribution),
+    intentN: Number(row.intent_n || 0),
+    intentMissingN: Number(row.intent_missing_n || 0),
+    intentMean: numberOrNull(row.intent_mean),
+    intentMedian: numberOrNull(row.intent_median),
+    intentDistribution: valueDistribution(row.intent_distribution),
+    weeklyTrend: (Array.isArray(row.weekly_trend) ? row.weekly_trend : []).map((item: any) => ({
+      weekStart: String(item.week_start),
+      n: Number(item.n || 0),
+      pctOriginal: numberOrNull(item.pct_original),
+      pctCurrent: numberOrNull(item.pct_current),
+      done: Number(item.done || 0),
+      planned: Number(item.planned || 0)
+    }))
+  };
+}
+
+export async function getMentorStudentLevelStatistics(
+  weeks: 0 | 4 | 8,
+  activityGroup: string | null = null
+): Promise<MentorStudentLevelStatistics> {
+  const { data, error } = await supabase.rpc('get_mentor_student_level_likert', {
+    p_weeks: weeks,
+    p_activity_group: activityGroup
+  });
+  throwIfError(error, 'Không tải được thống kê thang đo theo học sinh.');
+  const row = (data || {}) as Record<string, any>;
+  const toScale = (key: 'motivation' | 'difficulty' | 'intent') => ({
+    n: Number(row[`${key}_n`] || 0),
+    missingN: Number(row[`${key}_missing_n`] || 0),
+    mean: row[`${key}_mean`] == null ? null : Number(row[`${key}_mean`]),
+    median: row[`${key}_median`] == null ? null : Number(row[`${key}_median`]),
+    distribution: (Array.isArray(row[`${key}_distribution`]) ? row[`${key}_distribution`] : []).map((item: any) => ({
+      value: Number(item.value),
+      count: Number(item.count || 0)
+    }))
+  });
+
+  return {
+    motivation: toScale('motivation'),
+    difficulty: toScale('difficulty'),
+    intent: toScale('intent')
+  };
+}
+
 export async function getMentorSupportRequests() {
   const { data, error } = await supabase
     .from('v_mentor_support_requests')
@@ -687,33 +777,19 @@ export async function approveTestSetAccess(modelVersionId: string, approvedBy: s
 
 // Mentor: Xác nhận trạng thái khi học sinh mất liên lạc
 export async function confirmStatusByMentor(
-  mentorId: string,
   studentId: string,
   weekStart: string,
   status: 'training' | 'resting' | 'achieved' | 'stopped',
   note?: string
 ) {
-  const res = await supabase.from('weekly_status').upsert({
-    student_id: studentId,
-    week_start: weekStart,
-    status,
-    confirmed_by: 'mentor',
-    note,
-    updated_at: new Date().toISOString()
-  }, {
-    onConflict: 'student_id,week_start'
+  const { data, error } = await supabase.rpc('confirm_mentor_weekly_status', {
+    p_student_id: studentId,
+    p_week_start: weekStart,
+    p_status: status,
+    p_note: note || ''
   });
-  throwIfError(res.error, 'Không lưu được trạng thái học sinh.');
-
-  const audit = await supabase.from('audit_log').insert({
-    actor_id: mentorId,
-    actor_role: 'mentor',
-    action: 'confirm_status_by_mentor',
-    target: `weekly_status:${studentId}:${weekStart}`,
-    meta: { status, note }
-  });
-  throwIfError(audit.error, 'Đã lưu trạng thái nhưng chưa ghi được audit log.');
-  return res;
+  throwIfError(error, 'Không lưu được trạng thái và outcome đã xác nhận.');
+  return data;
 }
 
 // Mentor: Gửi phản hồi động viên từ mẫu khoa học có sẵn
@@ -797,6 +873,31 @@ export async function getStudyOutcomes(): Promise<StudyOutcome[]> {
     tFollowUpWeeks: Number(o.t_follow_up_weeks || 0),
     sampleSize: Number(o.x_active_students || 0),
     planChangesCount: o.plan_changes_count == null ? undefined : Number(o.plan_changes_count)
+  }));
+}
+
+export async function getConfirmedStudyOutcomes(): Promise<ConfirmedStudyOutcome[]> {
+  const { data, error } = await supabase
+    .from('v_research_confirmed_outcomes')
+    .select('*')
+    .order('arm')
+    .order('student_code');
+
+  throwIfError(error, 'Không tải được outcome đã xác nhận.');
+  return (data || []).map((row) => ({
+    studentCode: row.student_code,
+    arm: row.arm,
+    consentState: row.consent_state,
+    assignedAt: row.assigned_at,
+    assignmentDateSource: row.assignment_date_source,
+    followUpDue: Boolean(row.follow_up_due),
+    followUpComplete: Boolean(row.follow_up_complete),
+    outcome: row.outcome,
+    effectiveDate: row.effective_date,
+    weekStart: row.week_start,
+    confirmerRole: row.confirmer_role,
+    definitionVersion: row.definition_version == null ? null : Number(row.definition_version),
+    recordedAt: row.recorded_at
   }));
 }
 
@@ -894,22 +995,43 @@ export async function requestTestSetAccess(modelVersionId: string, requestedBy: 
 }
 
 // Xuất bộ dữ liệu nghiên cứu CSV đã mã hóa định danh (kèm ghi audit_log bắt buộc)
-export async function exportResearchDataset(researcherId: string, options?: { format: string }) {
+export async function exportResearchDataset(
+  researcherId: string,
+  options?: { format: string; datasetType?: 'students' | 'logs' | 'confirmed_outcomes' | 'primary_summary' }
+) {
+  const datasetType = options?.datasetType || 'logs';
   const audit = await supabase.from('audit_log').insert({
     actor_id: researcherId,
     actor_role: 'researcher',
     action: 'export_dataset',
-    target: 'v_research_dataset',
-    meta: { format: options?.format || 'csv', timestamp: new Date().toISOString() }
+    target: `v_research_${datasetType}`,
+    meta: { format: options?.format || 'csv', datasetType, timestamp: new Date().toISOString() }
   });
   throwIfError(audit.error, 'Không ghi được audit log xuất dữ liệu.');
 
-  const [students, logs, outcomes] = await Promise.all([
-    fetchAllPages((start, end) => supabase.from('v_research_students').select('*').order('student_code').range(start, end), 'Không xuất được danh sách học sinh.'),
-    fetchAllPages((start, end) => supabase.from('v_research_logs').select('*').order('student_code').order('session_date').order('log_id').range(start, end), 'Không xuất được nhật ký nghiên cứu.'),
-    fetchAllPages((start, end) => supabase.from('v_outcomes').select('*').order('arm').range(start, end), 'Không xuất được kết quả nghiên cứu.')
-  ]);
-  return { students, logs, outcomes };
+  if (datasetType === 'confirmed_outcomes') {
+    const confirmedOutcomes = await fetchAllPages(
+      (start, end) => supabase.from('v_research_confirmed_outcomes').select('*').order('arm').order('student_code').range(start, end),
+      'Không xuất được outcome đã xác nhận.'
+    );
+    return { students: [], logs: [], outcomes: [], confirmedOutcomes };
+  }
+  if (datasetType === 'students') {
+    const students = await fetchAllPages(
+      (start, end) => supabase.from('v_research_students').select('*').order('student_code').range(start, end),
+      'Không xuất được danh sách học sinh.'
+    );
+    return { students, logs: [], outcomes: [], confirmedOutcomes: [] };
+  }
+  if (datasetType === 'primary_summary') {
+    return { students: [], logs: [], outcomes: [], confirmedOutcomes: [] };
+  }
+
+  const logs = await fetchAllPages(
+    (start, end) => supabase.from('v_research_logs').select('*').order('student_code').order('session_date').order('log_id').range(start, end),
+    'Không xuất được nhật ký nghiên cứu.'
+  );
+  return { students: [], logs, outcomes: [], confirmedOutcomes: [] };
 }
 
 // ============================================================================
@@ -1492,30 +1614,40 @@ export async function resolveDataRequest(id: string, status: 'completed' | 'reje
 }
 
 export async function getDataQualityIssues() {
-  const { data: logs, error } = await supabase.from('session_logs').select('*').limit(2000);
-  throwIfError(error, 'Không tải được nhật ký để kiểm tra chất lượng dữ liệu.');
-  const rows = logs || [];
-  const durationOutliers = rows.filter((l) => l.duration_min != null && (l.duration_min > 240 || l.duration_min < 0));
-  const keyCount: Record<string, number> = {};
-  rows.forEach((l) => {
-    const k = `${l.student_id}|${l.goal_id}|${l.session_date}`;
-    keyCount[k] = (keyCount[k] || 0) + 1;
-  });
-  const dupKeys = Object.entries(keyCount).filter(([, n]) => n > 1).map(([k]) => k);
-  const monday = (() => {
-    const d = new Date();
-    const day = d.getDay();
-    d.setDate(d.getDate() - day + (day === 0 ? -6 : 1));
-    return d.toISOString().split('T')[0];
-  })();
-  const thisWeek = rows.filter((l) => l.session_date >= monday);
+  const { data, error } = await supabase.rpc('get_admin_data_quality_summary');
+  throwIfError(error, 'Không tải được thống kê chất lượng dữ liệu từ database.');
+  const row = (data || {}) as Record<string, any>;
   return {
-    totalLogs: rows.length,
-    durationOutliers: durationOutliers.length,
-    duplicateKeys: dupKeys.length,
-    outlierRows: durationOutliers.slice(0, 30),
-    duplicateRows: dupKeys.slice(0, 30),
-    logsThisWeek: thisWeek.length
+    totalLogs: Number(row.total_logs || 0),
+    logsThisWeek: Number(row.logs_this_week || 0),
+    durationOutliers: Number(row.duration_outliers || 0),
+    duplicateKeys: Number(row.duplicate_keys || 0),
+    doneLogs: Number(row.done_logs || 0),
+    partialLogs: Number(row.partial_logs || 0),
+    missedLogs: Number(row.missed_logs || 0),
+    logsWithSkippedFields: Number(row.logs_with_skipped_fields || 0),
+    activeStudents: Number(row.active_students || 0),
+    activeConsentedStudents: Number(row.active_consented_students || 0),
+    randomizedStudents: Number(row.randomized_students || 0),
+    activeStudentsWithoutLogs: Number(row.active_students_without_logs || 0),
+    statusDistribution: (Array.isArray(row.status_distribution) ? row.status_distribution : []).map((item: any) => ({
+      label: String(item.label),
+      count: Number(item.count || 0)
+    })),
+    missingness: (Array.isArray(row.missingness) ? row.missingness : []).map((item: any) => ({
+      field: String(item.field),
+      missing: Number(item.missing || 0),
+      denominator: Number(item.denominator || 0)
+    })),
+    outlierRows: (Array.isArray(row.outlier_rows) ? row.outlier_rows : []).map((item: any) => ({
+      id: String(item.id),
+      student_code: String(item.student_code || '—'),
+      session_date: String(item.session_date),
+      duration_min: Number(item.duration_min)
+    })),
+    duplicateRows: (Array.isArray(row.duplicate_rows) ? row.duplicate_rows : []).map((item: any) =>
+      `${item.student_code || '—'} | ${item.session_date} · ${item.duplicate_count} bản ghi`
+    )
   };
 }
 
@@ -1787,6 +1919,64 @@ export async function getResearchReportConfig() {
   return data;
 }
 
+export async function getResearchAnalysisSnapshots(): Promise<ResearchAnalysisSnapshot[]> {
+  const { data, error } = await supabase
+    .from('research_analysis_snapshots')
+    .select('id, analysis_version, config, results, created_at')
+    .order('created_at', { ascending: false })
+    .limit(10);
+  throwIfError(error, 'Không tải được lịch sử snapshot phân tích.');
+  return (data || []).map((row) => ({
+    id: row.id,
+    analysisVersion: row.analysis_version,
+    config: row.config as Record<string, unknown>,
+    results: row.results as Record<string, unknown>,
+    createdAt: row.created_at
+  }));
+}
+
+export async function getResearchSupportAndPredictionSummary(): Promise<ResearchSupportAndPredictionSummary> {
+  const { data, error } = await supabase.rpc('get_research_support_and_prediction_summary');
+  throwIfError(error, 'Không tải được thống kê hỗ trợ và phân bố dự đoán.');
+  const row = (data || {}) as Record<string, any>;
+  const support = row.support || {};
+  const paired = row.paired_completion || {};
+  const predictions = row.model_predictions || {};
+  const numberOrNull = (value: unknown) => value == null ? null : Number(value);
+  return {
+    support: {
+      totalInvites: Number(support.total_invites || 0),
+      supportedStudents: Number(support.supported_students || 0),
+      acceptedInvites: Number(support.accepted_invites || 0),
+      declinedInvites: Number(support.declined_invites || 0),
+      snoozedInvites: Number(support.snoozed_invites || 0),
+      helpfulResponses: Number(support.helpful_responses || 0),
+      meanHelpfulRating: numberOrNull(support.mean_helpful_rating)
+    },
+    pairedCompletion: {
+      n: Number(paired.n || 0),
+      meanBeforePct: numberOrNull(paired.mean_before_pct),
+      meanAfterPct: numberOrNull(paired.mean_after_pct),
+      meanChangePp: numberOrNull(paired.mean_change_pp),
+      medianChangePp: numberOrNull(paired.median_change_pp),
+      improvedN: Number(paired.improved_n || 0),
+      unchangedN: Number(paired.unchanged_n || 0),
+      declinedN: Number(paired.declined_n || 0)
+    },
+    modelPredictions: {
+      predictionRows: Number(predictions.prediction_rows || 0),
+      students: Number(predictions.students || 0),
+      flaggedRows: Number(predictions.flagged_rows || 0),
+      meanPredictedProbability: numberOrNull(predictions.mean_predicted_probability),
+      evaluationStatus: String(predictions.evaluation_status || 'operational_scores_not_independent_test_evaluation'),
+      probabilityBands: (Array.isArray(predictions.probability_bands) ? predictions.probability_bands : []).map((item: any) => ({
+        label: String(item.label),
+        count: Number(item.count || 0)
+      }))
+    }
+  };
+}
+
 export async function saveResearchReportConfig(config: {
   retentionThresholdPct?: number;
   primaryDenominatorType?: 'all_randomized' | 'under_observation' | 'completed_followup';
@@ -1804,4 +1994,14 @@ export async function saveResearchReportConfig(config: {
     }
   });
   throwIfError(error, 'Không lưu được cấu hình báo cáo nghiên cứu.');
+}
+
+export async function saveResearchAnalysisSnapshot(config: Record<string, unknown>, results: Record<string, unknown>) {
+  const { data, error } = await supabase.rpc('save_research_analysis_snapshot', {
+    p_analysis_version: 'edupulse-statistics-v1',
+    p_config: config,
+    p_results: results
+  });
+  throwIfError(error, 'Không lưu được snapshot phân tích.');
+  return String(data);
 }
