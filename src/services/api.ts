@@ -5,7 +5,9 @@ import {
   StudentContact,
   ConsentRecord,
   Goal,
+  PlanningStatus,
   PlanVersion,
+  PlanTask,
   SessionLog,
   RestPeriod,
   WeeklyStatus,
@@ -47,7 +49,10 @@ function mapProfileRow(data: any, fallbackEmail = '', fallbackName = ''): UserPr
 }
 
 function throwIfError(error: { message?: string } | null, fallback: string) {
-  if (error) throw new Error(error.message || fallback);
+  if (!error) return;
+  const message = error.message || '';
+  const technicalError = /column reference .* is ambiguous|relation .* does not exist|column .* does not exist|permission denied|row-level security|could not find the function|PGRST|duplicate key|violates .* constraint|syntax error at or near|operator does not exist/i;
+  throw new Error(technicalError.test(message) ? fallback : message || fallback);
 }
 
 async function fetchAllPages<T>(
@@ -190,6 +195,7 @@ export async function getStudentGoal(studentId: string): Promise<Goal | null> {
     .select('*')
     .eq('student_id', studentId)
     .eq('status', 'active')
+    .is('archived_at', null)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -199,6 +205,11 @@ export async function getStudentGoal(studentId: string): Promise<Goal | null> {
   return {
     id: data.id,
     studentId: data.student_id,
+    planTitle: data.plan_title || data.success_criteria,
+    description: data.plan_description || '',
+    startDate: data.start_date || data.created_at?.slice(0, 10),
+    priority: data.priority || 'medium',
+    planningStatus: data.planning_status || 'in_progress',
     activityGroup: data.activity_group,
     targetDate: data.target_date,
     successCriteria: data.success_criteria,
@@ -209,6 +220,33 @@ export async function getStudentGoal(studentId: string): Promise<Goal | null> {
   };
 }
 
+export async function getStudentGoals(studentId: string): Promise<Goal[]> {
+  const { data, error } = await supabase
+    .from('goals')
+    .select('*')
+    .eq('student_id', studentId)
+    .is('archived_at', null)
+    .order('created_at', { ascending: false });
+
+  throwIfError(error, 'Không tải được danh sách mục tiêu.');
+  return (data || []).map((row) => ({
+    id: row.id,
+    studentId: row.student_id,
+    planTitle: row.plan_title || row.success_criteria,
+    description: row.plan_description || '',
+    startDate: row.start_date || row.created_at?.slice(0, 10),
+    priority: row.priority || 'medium',
+    planningStatus: row.planning_status || 'in_progress',
+    activityGroup: row.activity_group,
+    targetDate: row.target_date,
+    successCriteria: row.success_criteria,
+    minTask: row.min_task,
+    supportPerson: row.support_person,
+    status: row.status,
+    createdAt: row.created_at
+  }));
+}
+
 export async function createStudentGoal(studentId: string, goalData: Partial<Goal>) {
   const res = await supabase
     .from('goals')
@@ -216,15 +254,47 @@ export async function createStudentGoal(studentId: string, goalData: Partial<Goa
       student_id: studentId,
       activity_group: goalData.activityGroup,
       target_date: goalData.targetDate,
-      success_criteria: goalData.successCriteria,
+      plan_title: goalData.planTitle || goalData.successCriteria,
+      plan_description: goalData.description || '',
+      start_date: goalData.startDate,
+      priority: goalData.priority || 'medium',
+      planning_status: goalData.planningStatus || 'in_progress',
+      success_criteria: goalData.successCriteria || goalData.planTitle,
       min_task: goalData.minTask,
       support_person: goalData.supportPerson,
-      status: 'active'
+      status: goalData.planningStatus === 'completed' ? 'achieved' : 'active'
     })
     .select()
     .single();
   throwIfError(res.error, 'Không tạo được mục tiêu.');
   return res;
+}
+
+export async function updateStudentGoal(goalId: string, goalData: Partial<Goal>) {
+  const update: Record<string, unknown> = {};
+  if (goalData.planTitle !== undefined) {
+    update.plan_title = goalData.planTitle;
+    update.success_criteria = goalData.planTitle;
+  }
+  if (goalData.description !== undefined) update.plan_description = goalData.description;
+  if (goalData.startDate !== undefined) update.start_date = goalData.startDate;
+  if (goalData.targetDate !== undefined) update.target_date = goalData.targetDate;
+  if (goalData.priority !== undefined) update.priority = goalData.priority;
+  if (goalData.planningStatus !== undefined) {
+    update.planning_status = goalData.planningStatus;
+  }
+  if (goalData.activityGroup !== undefined) update.activity_group = goalData.activityGroup;
+
+  const { error } = await supabase.from('goals').update(update).eq('id', goalId);
+  throwIfError(error, 'Không cập nhật được kế hoạch.');
+}
+
+export async function archiveStudentGoal(goalId: string) {
+  const { error } = await supabase
+    .from('goals')
+    .update({ archived_at: new Date().toISOString() })
+    .eq('id', goalId);
+  throwIfError(error, 'Không xóa được kế hoạch.');
 }
 
 export async function getPlanVersions(goalId: string): Promise<PlanVersion[]> {
@@ -263,6 +333,105 @@ export async function createPlanVersion(plan: Partial<PlanVersion>) {
     .single();
   throwIfError(res.error, 'Không lưu được phiên bản kế hoạch.');
   return res;
+}
+
+export async function getPlanTasks(goalId: string): Promise<PlanTask[]> {
+  const { data, error } = await supabase
+    .from('plan_tasks')
+    .select('*')
+    .eq('goal_id', goalId)
+    .order('position', { ascending: true })
+    .order('created_at', { ascending: true });
+
+  throwIfError(error, 'Không tải được danh sách việc cần làm.');
+  return (data || []).map((row) => ({
+    id: row.id,
+    goalId: row.goal_id,
+    studentId: row.student_id,
+    title: row.title,
+    description: row.description || '',
+    dueDate: row.due_date || undefined,
+    priority: row.priority || 'medium',
+    status: row.status || (row.completed ? 'completed' : 'not_started'),
+    completed: row.completed,
+    position: row.position,
+    createdAt: row.created_at
+  }));
+}
+
+export async function getStudentPlanTasks(studentId: string): Promise<PlanTask[]> {
+  const { data, error } = await supabase
+    .from('plan_tasks')
+    .select('*')
+    .eq('student_id', studentId)
+    .order('position', { ascending: true })
+    .order('created_at', { ascending: true });
+  throwIfError(error, 'Không tải được danh sách công việc.');
+  return (data || []).map((row) => ({
+    id: row.id,
+    goalId: row.goal_id,
+    studentId: row.student_id,
+    title: row.title,
+    description: row.description || '',
+    dueDate: row.due_date || undefined,
+    priority: row.priority || 'medium',
+    status: row.status || (row.completed ? 'completed' : 'not_started'),
+    completed: row.completed,
+    position: row.position,
+    createdAt: row.created_at
+  }));
+}
+
+export async function createPlanTask(
+  goalId: string,
+  studentId: string,
+  task: { title: string; description?: string; dueDate?: string; priority?: 'low' | 'medium' | 'high'; status?: PlanningStatus }
+) {
+  const { data, error } = await supabase
+    .from('plan_tasks')
+    .insert({
+      goal_id: goalId,
+      student_id: studentId,
+      title: task.title,
+      description: task.description || '',
+      due_date: task.dueDate || null,
+      priority: task.priority || 'medium',
+      status: task.status || 'not_started',
+      completed: task.status === 'completed'
+    })
+    .select()
+    .single();
+  throwIfError(error, 'Không thêm được việc cần làm.');
+  return data;
+}
+
+export async function updatePlanTask(taskId: string, updates: {
+  title?: string;
+  description?: string;
+  dueDate?: string;
+  priority?: 'low' | 'medium' | 'high';
+  status?: PlanningStatus;
+  completed?: boolean;
+}) {
+  const row: Record<string, unknown> = {};
+  if (updates.title !== undefined) row.title = updates.title;
+  if (updates.description !== undefined) row.description = updates.description;
+  if (updates.dueDate !== undefined) row.due_date = updates.dueDate || null;
+  if (updates.priority !== undefined) row.priority = updates.priority;
+  if (updates.status !== undefined) {
+    row.status = updates.status;
+    row.completed = updates.status === 'completed';
+  } else if (updates.completed !== undefined) {
+    row.completed = updates.completed;
+    row.status = updates.completed ? 'completed' : 'not_started';
+  }
+  const { error } = await supabase.from('plan_tasks').update(row).eq('id', taskId);
+  throwIfError(error, 'Không cập nhật được việc cần làm.');
+}
+
+export async function deletePlanTask(taskId: string) {
+  const { error } = await supabase.from('plan_tasks').delete().eq('id', taskId);
+  throwIfError(error, 'Không xóa được việc cần làm.');
 }
 
 export async function getSessionLogs(studentId: string): Promise<SessionLog[]> {
@@ -375,7 +544,7 @@ export async function confirmWeeklyStatus(
     p_status: status,
     p_note: note || null
   });
-  throwIfError(error, 'Không lưu được trạng thái và outcome của tuần.');
+  throwIfError(error, 'Không lưu được xác nhận tuần.');
   return data;
 }
 
@@ -454,6 +623,7 @@ export async function getSupportInvites(studentId: string): Promise<SupportInvit
     studentId: inv.student_id,
     predictionId: inv.prediction_id,
     contentId: inv.content_id,
+    barrier: inv.support_content?.barrier,
     contentTitle: inv.support_content?.title || 'Gợi ý duy trì động lực',
     contentBody: inv.support_content?.body || '',
     evidenceRef: inv.support_content?.evidence_ref,
@@ -1739,6 +1909,12 @@ export async function triggerWeeklySummary(weekStart: string, adminId?: string) 
   const res = await supabase.rpc('admin_calculate_weekly_summary', { p_week_start: weekStart });
   throwIfError(res.error, 'Không tính được tổng kết tuần.');
   return res;
+}
+
+export async function triggerWeeklyPipeline(weekStart: string) {
+  const { data, error } = await supabase.rpc('admin_run_weekly_pipeline', { p_week_start: weekStart });
+  throwIfError(error, 'Không chạy được tổng hợp và dự đoán tuần.');
+  return data;
 }
 
 export async function importInvitesCsv(text: string, adminId?: string) {

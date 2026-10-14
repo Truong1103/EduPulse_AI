@@ -56,7 +56,7 @@ export const BarrierPicker: React.FC<{
 }> = ({ value, onChange, skipped, onSkip }) => (
   <div className="space-y-2">
     <div className="flex justify-between items-center">
-      <span className="text-xs font-bold text-slate-800 uppercase">Khó khăn chính (bảng 7.2)</span>
+      <span className="text-xs font-bold text-slate-800 uppercase">Khó khăn chính</span>
       {onSkip && (
         <button type="button" onClick={onSkip} className="text-[11px] underline text-slate-400 cursor-pointer">
           {skipped ? 'Đã bỏ qua' : 'Không muốn trả lời'}

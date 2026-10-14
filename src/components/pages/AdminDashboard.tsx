@@ -6,7 +6,6 @@ import {
   Sliders,
   FileText,
   AlertTriangle,
-  Play,
   UserPlus,
   CheckCircle2,
   Eye,
@@ -40,6 +39,7 @@ import {
 } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
 import { RoleWorkspace } from '../common/RoleWorkspace';
+import { generateSupportDraft } from '../../lib/geminiSupport';
 import { FrequencyHistogram } from '../common/StudyCharts';
 import {
   getAllUserProfiles,
@@ -58,7 +58,7 @@ import {
   getAppSettings,
   updateAppSetting,
   getAuditLogs,
-  triggerWeeklyPredict,
+  triggerWeeklyPipeline,
   assignMentor,
   getMentorAssignments,
   updateMentorAssignment,
@@ -71,6 +71,16 @@ import {
   triggerWeeklySummary,
   importInvitesCsv
 } from '../../services/api';
+
+const toLocalDateInput = (date: Date) => new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+
+const lastCompletedWeekMonday = () => {
+  const monday = new Date();
+  monday.setHours(12, 0, 0, 0);
+  const dayOfWeek = monday.getDay() || 7;
+  monday.setDate(monday.getDate() - dayOfWeek + 1 - 7);
+  return toLocalDateInput(monday);
+};
 
 interface AdminDashboardProps {
   onAddToast: (title: string, message: string, type?: 'success' | 'info' | 'warning') => void;
@@ -109,6 +119,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
   const [csvText, setCsvText] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [weeklyJobStart, setWeeklyJobStart] = useState(lastCompletedWeekMonday);
+  const [weeklyJobRunning, setWeeklyJobRunning] = useState(false);
 
   // Live Database States
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
@@ -387,6 +399,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
     }
   };
 
+  const handleGenerateSupportDraft = async () => {
+    const selectedSource = evidenceSources.find((s) => s.id === newSelectedSourceId);
+    const barrierLabel = {
+      fatigue_overload: 'Quá tải / kiệt sức',
+      time: 'Thiếu thời gian',
+      task_difficulty: 'Nhiệm vụ quá khó',
+      lack_progress: 'Chưa thấy tiến bộ',
+      no_companion: 'Thiếu người đồng hành',
+      change_goal: 'Muốn đổi mục tiêu'
+    }[newBarrier] || 'Rào cản hỗ trợ';
+
+    try {
+      const draft = await generateSupportDraft({
+        barrier: newBarrier,
+        sourceCitation: selectedSource?.citation,
+        evidenceLevel: selectedSource?.sourceType ? 'design_principle' : 'other_population',
+        studentContext: 'Học sinh đang cần giữ nhịp học đều đặn và giảm cảm giác chán nản.'
+      });
+
+      setNewTitle(`${barrierLabel}: ${draft.title}`.trim() || 'Gợi ý hỗ trợ cho học sinh');
+      setNewBody(draft.body.trim());
+      onAddToast('Đã tạo bản nháp AI', `Rào cản: ${barrierLabel}. Bạn có thể chỉnh sửa và lưu vào thư viện can thiệp.`, 'info');
+    } catch (err: any) {
+      onAddToast('Không tạo được bản nháp AI', err.message || 'Vui lòng thử lại.', 'warning');
+    }
+  };
+
   // Tải danh bạ có ghi log
   const handleLoadContacts = async () => {
     try {
@@ -431,25 +470,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
     }
   };
 
-  const handleRunWeeklyPredict = async () => {
-    const weekStart = new Date().toISOString().split('T')[0];
-    try {
-      await triggerWeeklyPredict(weekStart, adminId);
-      onAddToast('Đã kích hoạt dự đoán!', 'Hàm run_weekly_prediction đã được thực thi trên PostgreSQL.', 'success');
-      loadData();
-    } catch (err: any) {
-      onAddToast('Lỗi', err.message, 'warning');
+  const handleRunWeeklyPipeline = async () => {
+    if (!weeklyJobStart || new Date(`${weeklyJobStart}T12:00:00`).getDay() !== 1) {
+      onAddToast('Chọn ngày bắt đầu tuần', 'Mốc tuần phải là Thứ Hai.', 'warning');
+      return;
     }
-  };
-
-  const handleRunWeeklySummary = async () => {
-    const weekStart = new Date().toISOString().split('T')[0];
+    setWeeklyJobRunning(true);
     try {
-      await triggerWeeklySummary(weekStart, adminId);
-      onAddToast('Tổng hợp tuần xong!', 'weekly_summary đã được cập nhật. Học sinh và mentor có thể thấy dữ liệu mới.', 'success');
-      loadData();
+      const result = await triggerWeeklyPipeline(weeklyJobStart);
+      onAddToast(
+        'Đã xử lý tuần',
+        `${result?.flaggedStudents || 0} học sinh được gắn cờ · ${result?.insufficientDataStudents || 0} hồ sơ chưa đủ dữ liệu · ${result?.supportInvites || 0} lời mời hỗ trợ.`,
+        'success'
+      );
+      await loadData();
     } catch (err: any) {
-      onAddToast('Lỗi', err.message, 'warning');
+      onAddToast('Chưa xử lý được tuần', err.message || 'Vui lòng thử lại.', 'warning');
+    } finally {
+      setWeeklyJobRunning(false);
     }
   };
 
@@ -598,19 +636,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
             Làm mới
           </button>
+          <label className="flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3">
+            <span className="whitespace-nowrap text-[11px] font-semibold text-slate-600">Tuần vừa qua</span>
+            <input type="date" aria-label="Tuần bắt đầu từ Thứ Hai" value={weeklyJobStart} onChange={(event) => setWeeklyJobStart(event.target.value)} className="min-w-0 bg-transparent text-xs text-slate-700 outline-none" />
+          </label>
           <button
-            onClick={handleRunWeeklySummary}
-            className="px-4 py-2.5 rounded-xl bg-sky-100 hover:bg-sky-200 text-sky-800 font-bold text-xs flex items-center gap-2 cursor-pointer"
+            onClick={handleRunWeeklyPipeline}
+            disabled={weeklyJobRunning}
+            className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center gap-2 cursor-pointer disabled:cursor-wait disabled:opacity-60"
           >
-            <Activity className="w-4 h-4" />
-            Tổng hợp tuần
-          </button>
-          <button
-            onClick={handleRunWeeklyPredict}
-            className="px-4 py-2.5 rounded-xl bg-sky-100 hover:bg-sky-200 text-sky-800 font-bold text-xs flex items-center gap-2 cursor-pointer"
-          >
-            <Play className="w-4 h-4 fill-white" />
-            Dự đoán tuần
+            <Activity className={`w-4 h-4 ${weeklyJobRunning ? 'animate-pulse' : ''}`} />
+            {weeklyJobRunning ? 'Đang xử lý tuần...' : 'Tổng hợp & dự đoán'}
           </button>
         </>
       }
@@ -1167,16 +1203,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
                   required
                 />
 
-                <div className="flex justify-between items-center pt-1">
+                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 pt-1">
                   <span className="text-[11px] text-slate-500">
-                    * Lưu ý: Nếu chọn nguồn chưa xác minh, chiến lược sẽ tự động lưu ở trạng thái Bản nháp (draft).
+                    * Lưu ý: Nếu chọn nguồn chưa xác minh, chiến lược sẽ tự động lưu ở trạng thái Bản nháp (draft). AI chỉ tạo bản nháp trước khi lưu.
                   </span>
-                  <button
-                    type="submit"
-                    className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs cursor-pointer shadow-xs transition-all"
-                  >
-                    Lưu vào Thư viện
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleGenerateSupportDraft}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 font-bold text-[11px] cursor-pointer transition-all"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Tạo AI draft</span>
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs cursor-pointer shadow-xs transition-all"
+                    >
+                      Lưu vào Thư viện
+                    </button>
+                  </div>
                 </div>
               </form>
 
@@ -1707,10 +1753,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
             <button
               type="button"
               onClick={async () => {
-                const monday = new Date();
-                const day = monday.getDay();
-                monday.setDate(monday.getDate() - day + (day === 0 ? -6 : 1));
-                const weekStart = monday.toISOString().split('T')[0];
+                const weekStart = weeklyJobStart;
                 try {
                   await triggerWeeklySummary(weekStart, adminId);
                   onAddToast('Đã tính weekly_summary', `Tuần ${weekStart}`, 'success');

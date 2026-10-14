@@ -33,19 +33,27 @@ import {
   ChevronUp,
   Filter,
   Eye,
-  X
+  X,
+  ListTodo,
+  Trash2
 } from 'lucide-react';
-import { Goal, PlanVersion, SessionLog, RestPeriod, WeeklyStatus, ReminderPrefs, SupportInvite, SupportRequest, WeeklySummary, ConsentRecord, EvidenceSource } from '../../types';
+import { Goal, PlanVersion, PlanTask, SessionLog, RestPeriod, WeeklyStatus, ReminderPrefs, SupportInvite, SupportRequest, WeeklySummary, ConsentRecord, EvidenceSource } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
 import { RoleWorkspace } from '../common/RoleWorkspace';
+import { StudentPlanningWorkspace } from './StudentPlanningWorkspace';
 import {
   getStudentConsent,
   submitStudentConsent,
   withdrawStudentConsent,
-  getStudentGoal,
+  getStudentGoals,
   createStudentGoal,
   getPlanVersions,
   createPlanVersion,
+  getPlanTasks,
+  getStudentPlanTasks,
+  createPlanTask,
+  updatePlanTask,
+  deletePlanTask,
   getSessionLogs,
   createSessionLog,
   getRestPeriods,
@@ -76,6 +84,32 @@ import { ACTIVITY_GROUPS, LOG_STATUSES, barrierLabel, WEEKDAYS, BASELINE_SURVEY,
 import { DetailSheet, DrillCard } from '../common/DetailSheet';
 import { DualLineChart, DonutStatus, FrequencyHistogram, MotivationTrendChart, StreakCalendar, BarrierDistributionChart, SparkCard, Sparkline } from '../common/StudyCharts';
 import { calculateStrictWeeklyCompletion, frequencyTable, summarizeNumericFrequencies } from '../../utils/statistics';
+import { getBarrierTheme, getInvitePriority, getInviteProgressState, invitePriorityMeta } from '../../utils/supportInviteState';
+
+const surveyFieldLabels: Record<string, string> = {
+  helpful: 'Mức độ hữu ích',
+  ease: 'Mức độ dễ sử dụng',
+  annoyance: 'Mức độ phiền',
+  feedback: 'Góp ý thêm'
+};
+
+function surveyLabel(key: string) {
+  return BASELINE_SURVEY.find((question) => question.id === key)?.label
+    || surveyFieldLabels[key]
+    || key.replace(/([A-Z])/g, ' $1').replace(/[_-]/g, ' ').replace(/^./, (letter) => letter.toUpperCase());
+}
+
+function surveyValue(value: unknown): string {
+  if (value == null || value === '') return 'Chưa trả lời';
+  if (typeof value === 'boolean') return value ? 'Có' : 'Không';
+  if (Array.isArray(value)) return value.map((item) => surveyValue(item)).join(', ');
+  if (typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([key, item]) => `${surveyLabel(key)}: ${surveyValue(item)}`)
+      .join(' · ');
+  }
+  return String(value);
+}
 
 interface StudentDashboardProps {
   onAddToast: (title: string, message: string, type?: 'success' | 'info' | 'warning') => void;
@@ -92,8 +126,13 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
 
   // Real Database State
   const [consent, setConsent] = useState<ConsentRecord | null>(null);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [selectedGoalId, setSelectedGoalId] = useState('');
   const [goal, setGoal] = useState<Goal | null>(null);
   const [planVersions, setPlanVersions] = useState<PlanVersion[]>([]);
+  const [planTasks, setPlanTasks] = useState<PlanTask[]>([]);
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [newTaskDueDate, setNewTaskDueDate] = useState('');
   const [sessionLogs, setSessionLogs] = useState<SessionLog[]>([]);
   const [restPeriods, setRestPeriods] = useState<RestPeriod[]>([]);
   const [weeklySummaries, setWeeklySummaries] = useState<WeeklySummary[]>([]);
@@ -128,6 +167,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
   const [showPlanModal, setShowPlanModal] = useState(false);
   const [newSessionsPerWeek, setNewSessionsPerWeek] = useState(3);
   const [newPlanReason, setNewPlanReason] = useState('');
+  const [planFormError, setPlanFormError] = useState('');
 
   // Form báo nghỉ
   const [restFrom, setRestFrom] = useState('');
@@ -154,6 +194,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
   const [weekStartChoice, setWeekStartChoice] = useState(getCurrentMonday());
   const [weekStatusChoice, setWeekStatusChoice] = useState<'training' | 'resting' | 'achieved' | 'stopped'>('training');
   const [weekStatusNote, setWeekStatusNote] = useState('');
+  const [weekStatusError, setWeekStatusError] = useState('');
 
   // Form cấu hình nhắc nhở (P1)
   const [settingReminderEnabled, setSettingReminderEnabled] = useState(true);
@@ -359,9 +400,10 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
     setLoading(true);
     setLoadError(null);
     try {
-      const [cData, gData, lData, rpData, wsData, wStatData, remData, siData, srData, srcData, mentorData, buddyData, surveyRows, contactRow] = await Promise.all([
+      const [cData, gData, taskData, lData, rpData, wsData, wStatData, remData, siData, srData, srcData, mentorData, buddyData, surveyRows, contactRow] = await Promise.all([
         getStudentConsent(studentId),
-        getStudentGoal(studentId),
+        getStudentGoals(studentId),
+        getStudentPlanTasks(studentId),
         getSessionLogs(studentId),
         getRestPeriods(studentId),
         getWeeklySummaries(studentId),
@@ -377,7 +419,14 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
       ]);
 
       setConsent(cData);
-      setGoal(gData);
+      const selectedGoal = gData.find((item) => item.id === selectedGoalId)
+        || gData.find((item) => item.status === 'active')
+        || gData[0]
+        || null;
+      setGoals(gData);
+      setGoal(selectedGoal);
+      if (selectedGoal && selectedGoal.id !== selectedGoalId) setSelectedGoalId(selectedGoal.id);
+      setPlanTasks(taskData);
       setSessionLogs(lData);
       setRestPeriods(rpData);
       setWeeklySummaries(wsData);
@@ -405,9 +454,11 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
         });
       }
 
-      if (gData?.id) {
-        const pvData = await getPlanVersions(gData.id);
+      if (selectedGoal?.id) {
+        const pvData = await getPlanVersions(selectedGoal.id);
         setPlanVersions(pvData);
+      } else {
+        setPlanVersions([]);
       }
     } catch (err) {
       console.error('Error loading student data:', err);
@@ -421,8 +472,75 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
     loadData();
   }, [studentId]);
 
+  useEffect(() => {
+    if (!goals.length) return;
+    const selectedGoal = goals.find((item) => item.id === selectedGoalId)
+      || goals.find((item) => item.status === 'active')
+      || goals[0];
+    if (!selectedGoal) return;
+    setGoal(selectedGoal);
+    let cancelled = false;
+    getPlanVersions(selectedGoal.id)
+      .then((versions) => { if (!cancelled) setPlanVersions(versions); })
+      .catch((error) => { if (!cancelled) setLoadError(error instanceof Error ? error.message : 'Không tải được lịch kế hoạch.'); });
+    return () => { cancelled = true; };
+  }, [goals, selectedGoalId]);
+
+  const reloadPlanningData = async () => {
+    try {
+      const [updatedGoals, updatedTasks] = await Promise.all([
+        getStudentGoals(studentId),
+        getStudentPlanTasks(studentId)
+      ]);
+      setGoals(updatedGoals);
+      setPlanTasks(updatedTasks);
+      const selectedGoal = updatedGoals.find((item) => item.id === selectedGoalId)
+        || updatedGoals.find((item) => item.status === 'active')
+        || updatedGoals[0]
+        || null;
+      setGoal(selectedGoal);
+      if (selectedGoal?.id !== selectedGoalId) setSelectedGoalId(selectedGoal?.id || '');
+      setPlanVersions(selectedGoal ? await getPlanVersions(selectedGoal.id) : []);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : 'Không tải được dữ liệu kế hoạch.');
+      throw error;
+    }
+  };
+
+  const handleAddPlanTask = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!goal?.id || !newTaskTitle.trim()) return;
+    try {
+      await createPlanTask(goal.id, studentId, { title: newTaskTitle.trim(), dueDate: newTaskDueDate });
+      setNewTaskTitle('');
+      setNewTaskDueDate('');
+      setPlanTasks(await getPlanTasks(goal.id));
+    } catch {
+      onAddToast('Chưa thêm được việc', 'Vui lòng thử lại sau.', 'warning');
+    }
+  };
+
+  const handleTogglePlanTask = async (task: PlanTask) => {
+    try {
+      await updatePlanTask(task.id, { completed: !task.completed });
+      setPlanTasks((current) => current.map((item) => item.id === task.id ? { ...item, completed: !item.completed } : item));
+    } catch {
+      onAddToast('Chưa cập nhật được việc', 'Vui lòng thử lại sau.', 'warning');
+    }
+  };
+
+  const handleDeletePlanTask = async (taskId: string) => {
+    try {
+      await deletePlanTask(taskId);
+      setPlanTasks((current) => current.filter((item) => item.id !== taskId));
+    } catch {
+      onAddToast('Chưa xóa được việc', 'Vui lòng thử lại sau.', 'warning');
+    }
+  };
+
   const handleConfirmWeeklyStatus = async (e: React.FormEvent) => {
     e.preventDefault();
+    setWeekStatusError('');
     try {
       await confirmWeeklyStatus(
         weekStartChoice,
@@ -430,11 +548,11 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
         weekStatusNote || undefined
       );
       triggerConfetti();
-      onAddToast('Xác nhận thành công', 'Trạng thái tuần của bạn đã được cập nhật vào CSDL.', 'success');
+      onAddToast('Đã lưu xác nhận', 'Trạng thái luyện tập trong tuần đã được cập nhật.', 'success');
       setWeekStatusNote('');
       loadData();
     } catch (err: any) {
-      onAddToast('Lỗi xác nhận tuần', err.message, 'warning');
+      setWeekStatusError(err.message || 'Chưa lưu được xác nhận. Vui lòng thử lại.');
     }
   };
 
@@ -497,8 +615,8 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
       }
 
       setShowGoalModal(false);
-      onAddToast('Đã tạo mục tiêu!', 'Mục tiêu luyện tập của bạn đã được ghi nhận vào CSDL.', 'success');
-      loadData();
+      onAddToast('Đã tạo kế hoạch', 'Bạn có thể thêm các việc nhỏ và theo dõi tiến độ ngay bên dưới.', 'success');
+      if (createdGoal?.id) setSelectedGoalId(createdGoal.id);
     } catch (err: any) {
       onAddToast('Lỗi', err.message || 'Không thể tạo mục tiêu', 'warning');
     }
@@ -551,8 +669,9 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
 
   const handleCreatePlanVersion = async (e: React.FormEvent) => {
     e.preventDefault();
+    setPlanFormError('');
     if (!newPlanReason.trim() || !goal?.id) {
-      onAddToast('Lưu ý', 'Vui lòng nhập lý do điều chỉnh kế hoạch.', 'warning');
+      setPlanFormError('Hãy nhập lý do thay đổi lịch để tiếp tục.');
       return;
     }
 
@@ -572,10 +691,10 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
 
       setShowPlanModal(false);
       setNewPlanReason('');
-      onAddToast('Cập nhật kế hoạch!', 'Đã tạo phiên bản kế hoạch mới có hiệu lực từ hôm nay.', 'success');
+      onAddToast('Đã cập nhật lịch', 'Lịch mới sẽ được áp dụng từ hôm nay.', 'success');
       loadData();
     } catch (err: any) {
-      onAddToast('Lỗi', err.message, 'warning');
+      setPlanFormError(err.message || 'Chưa cập nhật được lịch. Vui lòng thử lại.');
     }
   };
 
@@ -660,7 +779,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();
-    onAddToast('Đã tải dữ liệu', 'Đã ghi yêu cầu xuất vào CSDL và tải JSON về máy.', 'success');
+    onAddToast('Đã tải dữ liệu', 'Bản sao dữ liệu của bạn đã được tải về thiết bị.', 'success');
   };
 
   if (loading) {
@@ -742,7 +861,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
             </button>
           ) : (
             <button
-              onClick={() => setShowGoalModal(true)}
+              onClick={() => setActiveTab('plan')}
               className="px-5 py-2.5 rounded-2xl bg-sky-100 hover:bg-sky-200 text-sky-800 font-bold text-xs transition-all flex items-center gap-2 cursor-pointer"
             >
               <Plus className="w-4 h-4 text-white" />
@@ -810,7 +929,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                     </div>
                     <button
                       type="button"
-                      onClick={() => setShowGoalModal(true)}
+                      onClick={() => setActiveTab('plan')}
                       className="px-3 py-2 rounded-xl bg-sky-100 text-sky-800 font-bold cursor-pointer hover:bg-sky-200"
                     >
                       Tạo mục tiêu
@@ -960,7 +1079,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                       <span className="text-[11px] font-bold uppercase tracking-[0.16em]">Thành tích & tiến trình tổng kết</span>
                     </div>
                     <h3 className="text-lg font-bold mt-1 text-slate-900">Những nỗ lực của bạn trong 90 ngày gần nhất</h3>
-                    <p className="text-xs text-slate-500 mt-1">Tính từ dữ liệu thực tế của session_logs và weekly_summary.</p>
+                    <p className="text-xs text-slate-500 mt-1">Tổng hợp từ các buổi bạn đã ghi nhận và xác nhận theo tuần.</p>
                   </div>
                   <div className="flex items-center gap-2 rounded-2xl bg-amber-50 px-3 py-2 border border-amber-200">
                     <Flame className="w-5 h-5 text-orange-500" />
@@ -1002,7 +1121,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                   </div>
                   {weeklySummaries.length === 0 ? (
                     <EmptyHint title="Chưa có tổng hợp tuần">
-                      Ghi nhật ký và xác nhận trạng thái cuối tuần. Admin chạy tổng hợp weekly_summary thì biểu đồ mới hiện. Không dùng số minh họa.
+                      Ghi lại các buổi luyện tập và xác nhận tình trạng mỗi tuần. Biểu đồ sẽ xuất hiện khi có đủ dữ liệu.
                     </EmptyHint>
                   ) : (
                     <div className="space-y-5 pt-1">
@@ -1049,7 +1168,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                   )}
                   <div className="pt-2 border-t border-slate-100">
                     <DonutStatus
-                      title="Phân bố trạng thái buổi (session_logs)"
+                      title="Kết quả các buổi luyện tập"
                       done={sessionLogs.filter((l) => l.status === 'done').length}
                       partial={sessionLogs.filter((l) => l.status === 'partial').length}
                       missed={sessionLogs.filter((l) => l.status === 'missed').length}
@@ -1070,7 +1189,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                         {assignedMentor.isLeadMentor ? ' · GVHD' : ''}
                       </span>
                     ) : (
-                      <span className="text-slate-500">Admin chưa phân công mentor_assignments.</span>
+                      <span className="text-slate-500">Chưa có người hướng dẫn được phân công.</span>
                     )}
                   </div>
                   <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs">
@@ -1124,8 +1243,12 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                     <button
                       type="button"
                       onClick={async () => {
-                        await submitSurvey(studentId, baseline, undefined, 'baseline');
-                        onAddToast('Đã lưu khảo sát ban đầu', 'Bản ghi surveys.survey_type = baseline.', 'success');
+                        try {
+                          await submitSurvey(studentId, baseline, undefined, 'baseline');
+                          onAddToast('Đã lưu khảo sát ban đầu', 'Bạn có thể xem lại câu trả lời trong lịch sử bên cạnh.', 'success');
+                        } catch {
+                          onAddToast('Chưa lưu được khảo sát', 'Vui lòng kiểm tra kết nối rồi thử lại.', 'warning');
+                        }
                         loadData();
                       }}
                       className="w-full py-3 rounded-2xl bg-sky-100 text-sky-800 font-bold text-xs cursor-pointer hover:bg-sky-200"
@@ -1137,17 +1260,30 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                   <div className="rounded-2xl bg-slate-50 p-4 border border-slate-200">
                     <h4 className="text-sm font-bold text-slate-900">Lịch sử khảo sát của bạn</h4>
                     {mySurveys.length === 0 ? (
-                      <EmptyHint title="Chưa có khảo sát">Gửi phụ lục A hoặc khảo sát trải nghiệm ở tab Thầy cô.</EmptyHint>
+                      <EmptyHint title="Chưa có khảo sát">Các khảo sát bạn đã gửi sẽ được lưu tại đây để tiện xem lại.</EmptyHint>
                     ) : (
                       <div className="space-y-3 mt-3">
                         {mySurveys.map((s) => (
-                          <div key={s.id} className="p-3 rounded-xl border border-slate-200 bg-white text-xs">
-                            <div className="flex justify-between font-bold text-slate-700">
-                              <span className="capitalize">{s.survey_type}</span>
+                          <details key={s.id} className="p-3 rounded-xl border border-slate-200 bg-white text-xs">
+                            <summary className="flex flex-wrap items-center justify-between gap-2 cursor-pointer font-bold text-slate-700">
+                              <span>{s.survey_type === 'baseline' ? 'Khảo sát ban đầu' : s.survey_type === 'post_support' ? 'Khảo sát sau hỗ trợ' : 'Khảo sát trải nghiệm'}</span>
                               <span className="text-slate-400">{new Date(s.created_at).toLocaleString('vi-VN')}</span>
-                            </div>
-                            <pre className="mt-1 whitespace-pre-wrap font-sans text-slate-600">{JSON.stringify(s.ratings, null, 2)}</pre>
-                          </div>
+                            </summary>
+                            <dl className="mt-2 space-y-2">
+                              {Object.entries((s.ratings || {}) as Record<string, unknown>)
+                                .filter(([, value]) => value != null && value !== '')
+                                .map(([key, value]) => (
+                                <div key={key}>
+                                  <dt className="text-slate-500">{surveyLabel(key)}</dt>
+                                  <dd className="font-medium text-slate-800">{surveyValue(value)}</dd>
+                                </div>
+                              ))}
+                              {!Object.values((s.ratings || {}) as Record<string, unknown>).some((value) => value != null && value !== '') && !s.feedback && (
+                                <p className="text-slate-500">Khảo sát này chưa có câu trả lời.</p>
+                              )}
+                              {s.feedback && <div><dt className="text-slate-500">Góp ý thêm</dt><dd className="font-medium text-slate-800">{s.feedback}</dd></div>}
+                            </dl>
+                          </details>
                         ))}
                       </div>
                     )}
@@ -1174,7 +1310,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                     <h3 className="text-lg font-bold text-slate-900">Phân tích sâu dữ liệu rèn luyện</h3>
                   </div>
                   <p className="text-xs text-slate-500 max-w-2xl leading-relaxed">
-                    Mọi số liệu tính từ <code>session_logs</code> thực tế — không dùng số minh họa. Cần ít nhất 3 buổi để có đủ dữ liệu vẽ biểu đồ.
+                    Biểu đồ chỉ hiển thị khi có đủ buổi luyện tập bạn đã ghi nhận.
                   </p>
                 </div>
                 <span className="shrink-0 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 text-[11px] font-mono font-semibold">
@@ -1216,9 +1352,9 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                         color: 'text-indigo-700 bg-indigo-50 border-indigo-200/60'
                       },
                       {
-                        label: 'Ý định thấp',
+                        label: 'Cần thêm động lực',
                         value: computedMetrics.avgLowIntent,
-                        sub: 'Buổi intent ≤ 2 · tín hiệu tự theo dõi, không phải dự đoán',
+                        sub: 'Số buổi bạn tự đánh giá mức muốn tiếp tục còn thấp',
                         color: computedMetrics.avgLowIntent > 0 ? 'text-rose-700 bg-rose-50 border-rose-200/60' : 'text-emerald-700 bg-emerald-50 border-emerald-200/60'
                       }
                     ].map(m => (
@@ -1275,9 +1411,9 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                           xAxisLabel="Mức tự đánh giá (1–5)"
                         />
                         <dl className="mt-3 grid grid-cols-3 gap-2 border-t border-slate-100 pt-3 text-[11px]">
-                          <div><dt className="text-slate-500">Mean</dt><dd className="font-bold text-slate-900">{scale.summary.mean == null ? '—' : scale.summary.mean.toFixed(2)}</dd></div>
-                          <div><dt className="text-slate-500">Median</dt><dd className="font-bold text-slate-900">{scale.summary.median == null ? '—' : scale.summary.median.toFixed(2)}</dd></div>
-                          <div><dt className="text-slate-500">IQR</dt><dd className="font-bold text-slate-900">{scale.summary.iqr == null ? '—' : scale.summary.iqr.toFixed(2)}</dd></div>
+                          <div><dt className="text-slate-500">Trung bình</dt><dd className="font-bold text-slate-900">{scale.summary.mean == null ? '—' : scale.summary.mean.toFixed(2)}</dd></div>
+                          <div><dt className="text-slate-500">Mức giữa</dt><dd className="font-bold text-slate-900">{scale.summary.median == null ? '—' : scale.summary.median.toFixed(2)}</dd></div>
+                          <div><dt className="text-slate-500">Khoảng dao động</dt><dd className="font-bold text-slate-900">{scale.summary.iqr == null ? '—' : scale.summary.iqr.toFixed(2)}</dd></div>
                         </dl>
                       </div>
                     ))}
@@ -1296,8 +1432,8 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                   {sessionLogs.some(l => l.barrier) && (
                     <div className="bg-white p-6 rounded-3xl border border-slate-200/90 shadow-xs space-y-4">
                       <div>
-                        <h3 className="text-sm font-bold text-slate-900">Phân bố rào cản (Bảng 7.2 đề cương)</h3>
-                        <p className="text-[11px] text-slate-500 mt-0.5">Rào cản bạn ghi nhiều nhất — dữ liệu thực tế từ trường <code>barrier</code> trong <code>session_logs</code>.</p>
+                        <h3 className="text-sm font-bold text-slate-900">Những khó khăn thường gặp</h3>
+                        <p className="text-[11px] text-slate-500 mt-0.5">Tổng hợp từ những khó khăn bạn đã chọn khi ghi nhật ký.</p>
                       </div>
                       <BarrierDistributionChart logs={sessionLogs} />
                     </div>
@@ -1346,6 +1482,19 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
 
           {/* TAB 2: KẾ HOẠCH & MỤC TIÊU */}
           {activeTab === 'plan' && (
+            <StudentPlanningWorkspace
+              studentId={studentId}
+              goals={goals}
+              tasks={planTasks}
+              selectedGoalId={selectedGoalId}
+              onSelectPlan={setSelectedGoalId}
+              onReload={reloadPlanningData}
+              onPlanDeleted={setSelectedGoalId}
+              onAddToast={onAddToast}
+            />
+          )}
+
+          {goal && false && activeTab === 'plan' && (
             <motion.div
               key="plan"
               initial={{ opacity: 0, y: 10 }}
@@ -1355,29 +1504,96 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
             >
               <div className="bg-white p-6 rounded-3xl border border-slate-200/90 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
-                  <h3 className="text-lg font-bold text-slate-900">Quản lý phiên bản kế hoạch (Plan Versioning)</h3>
+                  <h3 className="text-lg font-bold text-slate-900">Kế hoạch của tôi</h3>
                   <p className="text-xs text-slate-500 mt-1">
-                    Nguyên tắc nghiên cứu: Mỗi lần điều chỉnh kế hoạch sẽ lưu một phiên bản mới, không sửa ngược quá khứ.
+                    Tạo nhiều kế hoạch cho các mục tiêu khác nhau, rồi chia mục tiêu thành từng việc nhỏ.
                   </p>
                 </div>
-                {goal ? (
-                  <button
-                    onClick={() => setShowPlanModal(true)}
-                    className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm flex items-center gap-2 cursor-pointer transition-all shrink-0"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>Điều chỉnh kế hoạch</span>
-                  </button>
-                ) : (
+                <div className="flex flex-wrap gap-2">
                   <button
                     onClick={() => setShowGoalModal(true)}
                     className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm flex items-center gap-2 cursor-pointer transition-all shrink-0"
                   >
                     <Plus className="w-4 h-4" />
-                    <span>Thiết lập mục tiêu</span>
+                    <span>Kế hoạch mới</span>
                   </button>
-                )}
+                  {goal && <button
+                    onClick={() => setShowPlanModal(true)}
+                    className="px-4 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-sm flex items-center gap-2 cursor-pointer transition-all shrink-0"
+                  >
+                    <Calendar className="w-4 h-4" />
+                    <span>Đổi lịch</span>
+                  </button>}
+                </div>
               </div>
+
+              {goals.length > 0 && (
+                <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4">
+                  <aside className="bg-white p-4 rounded-3xl border border-slate-200/90 shadow-xs">
+                    <h4 className="text-sm font-bold text-slate-900 mb-3">Các kế hoạch</h4>
+                    <div className="space-y-2">
+                      {goals.map((item) => (
+                        <button
+                          type="button"
+                          key={item.id}
+                          onClick={() => setSelectedGoalId(item.id)}
+                          className={`w-full text-left p-3 rounded-xl border transition-colors ${item.id === goal?.id ? 'border-blue-300 bg-blue-50' : 'border-slate-200 hover:bg-slate-50'}`}
+                        >
+                          <span className="block text-xs font-bold text-slate-900">{item.successCriteria}</span>
+                          <span className="block mt-1 text-[11px] text-slate-500">{item.activityGroup} · đến {new Date(`${item.targetDate}T12:00:00`).toLocaleDateString('vi-VN')}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </aside>
+
+                  {goal && <section className="bg-white p-5 sm:p-6 rounded-3xl border border-slate-200/90 shadow-xs">
+                    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-4">
+                      <div>
+                        <div className="flex items-center gap-2 text-blue-700"><ListTodo className="w-4 h-4" /><span className="text-xs font-bold">{goal?.activityGroup}</span></div>
+                        <h4 className="text-lg font-bold text-slate-900 mt-1">{goal?.successCriteria}</h4>
+                        <p className="text-xs text-slate-500 mt-1">Mục tiêu đến {goal?.targetDate ? new Date(`${goal?.targetDate}T12:00:00`).toLocaleDateString('vi-VN') : '—'} · {planTasks.filter((task) => task.completed).length}/{planTasks.length} việc hoàn thành</p>
+                      </div>
+                      <span className="text-xs text-slate-500">Bước nhỏ: {goal?.minTask}</span>
+                    </div>
+                    <form onSubmit={handleAddPlanTask} className="grid grid-cols-1 sm:grid-cols-[1fr_170px_auto] gap-2 py-4">
+                      <input
+                        value={newTaskTitle}
+                        onChange={(event) => setNewTaskTitle(event.target.value)}
+                        placeholder="Thêm việc cần làm..."
+                        aria-label="Tên việc cần làm"
+                        className="min-w-0 p-2.5 rounded-xl border border-slate-200 text-sm"
+                        required
+                      />
+                      <input
+                        type="date"
+                        value={newTaskDueDate}
+                        onChange={(event) => setNewTaskDueDate(event.target.value)}
+                        aria-label="Ngày hoàn thành"
+                        className="p-2.5 rounded-xl border border-slate-200 text-sm"
+                      />
+                      <button type="submit" className="px-4 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-semibold flex items-center justify-center gap-2 hover:bg-slate-700">
+                        <Plus className="w-4 h-4" /> Thêm việc
+                      </button>
+                    </form>
+                    {planTasks.length === 0 ? (
+                      <div className="py-8 text-center border-t border-dashed border-slate-200 text-sm text-slate-500">Chưa có việc nào. Thêm bước nhỏ đầu tiên cho kế hoạch này.</div>
+                    ) : (
+                      <ul className="divide-y divide-slate-100 border-t border-slate-100">
+                        {planTasks.map((task) => (
+                          <li key={task.id} className="flex items-center gap-3 py-3">
+                            <input type="checkbox" checked={task.completed} onChange={() => handleTogglePlanTask(task)} aria-label={`Đánh dấu ${task.title}`} className="h-4 w-4 accent-blue-600" />
+                            <div className="min-w-0 flex-1">
+                              <p className={`text-sm ${task.completed ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{task.title}</p>
+                              {task.dueDate && <p className="text-[11px] text-slate-500 mt-0.5">Hạn {new Date(`${task.dueDate}T12:00:00`).toLocaleDateString('vi-VN')}</p>}
+                            </div>
+                            <button type="button" onClick={() => handleDeletePlanTask(task.id)} title="Xóa việc" aria-label={`Xóa ${task.title}`} className="p-2 text-slate-400 hover:text-rose-600"><Trash2 className="w-4 h-4" /></button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>}
+                </div>
+              )}
 
               {planVersions.length === 0 ? (
                 <div className="bg-white p-8 rounded-3xl border border-dashed border-slate-300 text-slate-500 text-xs space-y-4">
@@ -1522,10 +1738,11 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                         />
                       </div>
 
+                      {planFormError && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{planFormError}</p>}
                       <div className="flex items-center justify-end gap-3 pt-3">
                         <button
                           type="button"
-                          onClick={() => setShowPlanModal(false)}
+                          onClick={() => { setShowPlanModal(false); setPlanFormError(''); }}
                           className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 text-sm font-semibold cursor-pointer"
                         >
                           Hủy
@@ -1534,7 +1751,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                           type="submit"
                           className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold cursor-pointer"
                         >
-                          Lưu vào CSDL
+                          Lưu thay đổi
                         </button>
                       </div>
                     </form>
@@ -1661,7 +1878,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
               <div className="lg:col-span-7 bg-white p-6 sm:p-8 rounded-3xl border border-slate-200/90 shadow-xs space-y-6">
                 <div>
                   <h3 className="text-xl font-bold text-slate-900">Ghi nhận nhanh buổi rèn luyện (45 giây)</h3>
-                  <p className="text-xs text-slate-500 mt-1">Dữ liệu ghi trực tiếp vào bảng <code>session_logs</code>.</p>
+                  <p className="text-xs text-slate-500 mt-1">Ghi lại một buổi học hoặc luyện tập của bạn.</p>
                 </div>
 
                 {/* Goal info banner */}
@@ -1826,7 +2043,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                     className="w-full py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm shadow-md transition-all cursor-pointer flex items-center justify-center gap-2"
                   >
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>Lưu vào CSDL</span>
+                    <span>Lưu nhật ký</span>
                   </button>
                 </form>
               </div>
@@ -1902,7 +2119,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                           </div>
                           {log.barrier && <span className="text-slate-600 block text-[11px]">🚧 {barrierLabel(log.barrier)}</span>}
                           {log.notes && <p className="italic text-slate-600 text-[11px] truncate">"{log.notes}"</p>}
-                          <span className="text-[10px] font-bold text-sky-600">Bấm để xem đủ trường →</span>
+                          <span className="text-[10px] font-bold text-sky-600">Xem chi tiết →</span>
                         </button>
                       ))}
                     {sessionLogs.filter(log => logFilter === 'all' || log.status === logFilter).length === 0 && (
@@ -2053,76 +2270,183 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                       <History className="w-4 h-4" />
                       <h4 className="text-sm font-bold text-slate-900">Lịch sử phản hồi hỗ trợ</h4>
                     </div>
-                    <div className="space-y-2">
-                      {supportInvites.slice().sort((a, b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime()).map((inv) => (
-                        <div key={`${inv.id}-timeline`} className="flex gap-3 items-start rounded-2xl bg-slate-50 border border-slate-100 p-3">
-                          <div className={`mt-0.5 w-2.5 h-2.5 rounded-full ${inv.status === 'accepted' ? 'bg-emerald-500' : inv.status === 'snoozed' ? 'bg-amber-500' : inv.status === 'declined' ? 'bg-rose-500' : 'bg-sky-500'}`} />
-                          <div className="flex-1 min-w-0">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <span className="text-[11px] font-bold uppercase text-slate-600">{inv.contentTitle}</span>
-                              <span className="text-[10px] text-slate-400">{new Date(inv.sentAt).toLocaleDateString('vi-VN')}</span>
+                    <div className="relative ml-1 space-y-0 before:absolute before:bottom-4 before:left-[11px] before:top-4 before:w-px before:bg-slate-200">
+                      {supportInvites.slice().sort((a, b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime()).map((inv, index) => {
+                        const theme = getBarrierTheme(inv.barrier);
+                        const timelineStatus = getInviteProgressState(inv.status).label;
+                        const timelineStatusClass = inv.status === 'accepted'
+                          ? 'text-emerald-700 bg-emerald-50'
+                          : inv.status === 'snoozed'
+                            ? 'text-amber-800 bg-amber-50'
+                            : inv.status === 'declined'
+                              ? 'text-rose-700 bg-rose-50'
+                              : 'text-sky-700 bg-sky-50';
+
+                        return (
+                          <motion.div
+                            key={`${inv.id}-timeline`}
+                            layout
+                            initial={{ opacity: 0, x: -8 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ duration: 0.22, delay: Math.min(index * 0.04, 0.2) }}
+                            className="relative flex gap-3 pb-3 last:pb-0"
+                          >
+                            <motion.div
+                              layout
+                              className={`relative z-10 mt-3 h-6 w-6 shrink-0 rounded-full border-4 border-white shadow-sm ${inv.status === 'accepted' ? 'bg-emerald-500' : inv.status === 'snoozed' ? 'bg-amber-500' : inv.status === 'declined' ? 'bg-rose-500' : 'bg-sky-500'}`}
+                            />
+                            <div className={`min-w-0 flex-1 rounded-2xl border ${theme.accent} bg-white p-3 transition-colors duration-300`}>
+                              <div className="flex flex-wrap items-start justify-between gap-2">
+                                <div className="min-w-0 space-y-1">
+                                  <p className="truncate text-xs font-bold text-slate-800">{inv.contentTitle}</p>
+                                  <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${theme.badge}`}>
+                                    {barrierLabel(inv.barrier || '')}
+                                  </span>
+                                </div>
+                                <time className="shrink-0 text-[10px] text-slate-400">{new Date(inv.sentAt).toLocaleDateString('vi-VN')}</time>
+                              </div>
+                              <div className="mt-2 flex items-center justify-between gap-2">
+                                <AnimatePresence mode="wait" initial={false}>
+                                  <motion.span
+                                    key={inv.status}
+                                    initial={{ opacity: 0, y: 4 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0, y: -4 }}
+                                    transition={{ duration: 0.16 }}
+                                    className={`rounded-full px-2 py-1 text-[10px] font-bold ${timelineStatusClass}`}
+                                  >
+                                    {timelineStatus}
+                                  </motion.span>
+                                </AnimatePresence>
+                                <span className="text-[10px] text-slate-400">{inv.respondedAt ? `Phản hồi ${new Date(inv.respondedAt).toLocaleDateString('vi-VN')}` : 'Chưa phản hồi'}</span>
+                              </div>
                             </div>
-                            <p className="text-[11px] text-slate-600 mt-1">
-                              Trạng thái: <span className="font-bold">{inv.status === 'accepted' ? 'Đã áp dụng' : inv.status === 'snoozed' ? 'Đang hoãn' : inv.status === 'declined' ? 'Đã từ chối' : 'Đang chờ phản hồi'}</span>
-                            </p>
-                          </div>
-                        </div>
-                      ))}
+                          </motion.div>
+                        );
+                      })}
                     </div>
                   </div>
 
-                  {supportInvites.map((inv) => (
-                    <div key={inv.id} className="bg-white p-6 rounded-3xl border border-indigo-100 shadow-sm space-y-4">
-                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                        <span className="text-xs font-bold text-indigo-700 uppercase">Gợi ý đồng hành</span>
-                        <span className="text-xs text-slate-400">{new Date(inv.sentAt).toLocaleDateString('vi-VN')}</span>
-                      </div>
-                      <h4 className="text-base font-bold text-slate-900">{inv.contentTitle}</h4>
-                      <p className="text-xs text-slate-700 bg-indigo-50/50 p-3 rounded-xl">{inv.contentBody}</p>
-                      {inv.evidenceRef && (
-                        <p className="text-[11px] text-indigo-800 italic">Cơ sở khoa học: {inv.evidenceRef}</p>
-                      )}
+                  {supportInvites.map((inv) => {
+                    const isResolved = inv.status !== 'sent';
+                    const statusLabel = inv.status === 'accepted'
+                      ? 'Đã áp dụng'
+                      : inv.status === 'snoozed'
+                        ? 'Đang hoãn 3 ngày'
+                        : inv.status === 'declined'
+                          ? 'Đã từ chối'
+                          : 'Đang chờ phản hồi';
+                    const barrierName = barrierLabel(inv.barrier || '');
+                    const priority = getInvitePriority(inv.barrier);
+                    const progress = getInviteProgressState(inv.status);
+                    const theme = getBarrierTheme(inv.barrier);
 
-                      {/* Nút Vì sao gợi ý này & Phản hồi */}
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-slate-100">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedInviteForWhy(inv)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold cursor-pointer border border-blue-200/60 transition-all self-start sm:self-auto"
-                        >
-                          <HelpCircle className="w-3.5 h-3.5 text-blue-600" />
-                          <span>Vì sao gợi ý này?</span>
-                        </button>
-
-                        {inv.status === 'sent' ? (
+                    return (
+                      <motion.div
+                        key={inv.id}
+                        layout
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ layout: { duration: 0.24 }, opacity: { duration: 0.2 }, y: { duration: 0.2 } }}
+                        className={`bg-white p-6 rounded-3xl border-l-4 ${theme.accent} shadow-sm space-y-4 transition-colors duration-300`}
+                      >
+                        <div className="flex items-center justify-between border-b border-slate-100 pb-3 gap-3">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-xs font-bold text-indigo-700 uppercase">Gợi ý đồng hành</span>
+                            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-bold ${theme.badge}`}>
+                              {barrierName}
+                            </span>
+                            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-bold ${invitePriorityMeta[priority].className}`}>
+                              {invitePriorityMeta[priority].label}
+                            </span>
+                          </div>
                           <div className="flex items-center gap-2">
-                            <button
-                              onClick={() => handleRespondInvite(inv.id, 'accepted')}
-                              className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs cursor-pointer shadow-xs transition-all"
-                            >
-                              Áp dụng giải pháp
-                            </button>
-                            <button
-                              onClick={() => handleRespondInvite(inv.id, 'snoozed')}
-                              className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer transition-all"
-                            >
-                              Hoãn 3 ngày
-                            </button>
-                            <button
-                              onClick={() => handleRespondInvite(inv.id, 'declined')}
-                              className="px-3 py-2 rounded-xl text-slate-400 hover:text-slate-600 font-bold text-xs cursor-pointer transition-all"
-                            >
-                              Từ chối
-                            </button>
+                            <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold ${isResolved ? 'bg-emerald-100 text-emerald-700' : 'bg-sky-100 text-sky-700'}`}>
+                              {statusLabel}
+                            </span>
+                            <span className="text-xs text-slate-400">{new Date(inv.sentAt).toLocaleDateString('vi-VN')}</span>
                           </div>
-                        ) : (
-                          <div className="text-xs font-semibold text-emerald-600">
-                            Trạng thái: {inv.status === 'accepted' ? 'Đã áp dụng' : inv.status === 'snoozed' ? 'Đang hoãn' : 'Đã từ chối'}
+                        </div>
+
+                        <div className="flex items-start justify-between gap-3">
+                          <h4 className="text-base font-bold text-slate-900">{inv.contentTitle}</h4>
+                          {!isResolved && (
+                            <span className="inline-flex items-center rounded-full bg-amber-50 border border-amber-200 px-2 py-1 text-[10px] font-bold text-amber-700">
+                              Cần phản hồi
+                            </span>
+                          )}
+                        </div>
+
+                        <div className={`space-y-2 rounded-2xl border border-slate-200 ${theme.panel} p-3 transition-colors duration-300`}>
+                          <div className="flex items-center justify-between gap-2 text-[10px] text-slate-600">
+                            <span className="font-semibold uppercase tracking-wide">Tiến độ xử lý</span>
+                            <span className="font-bold text-slate-700">{progress.label}</span>
                           </div>
+                          <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200">
+                            <div
+                              className={`h-full rounded-full ${inv.status === 'accepted' ? 'bg-emerald-500' : inv.status === 'declined' ? 'bg-rose-500' : inv.status === 'snoozed' ? 'bg-amber-500' : theme.progress} transition-[width,background-color] duration-500 ease-out`}
+                              style={{ width: `${progress.percent}%` }}
+                            />
+                          </div>
+                          <div className="flex justify-between text-[10px] text-slate-500">
+                            <span>Phát hiện rào cản</span>
+                            <span>Gửi lời mời</span>
+                            <span>Phản hồi</span>
+                          </div>
+                        </div>
+
+                        <p className="text-xs text-slate-700 bg-indigo-50/50 p-3 rounded-xl leading-relaxed">{inv.contentBody}</p>
+                        {inv.evidenceRef && (
+                          <p className="text-[11px] text-indigo-800 italic">Cơ sở khoa học: {inv.evidenceRef}</p>
                         )}
-                      </div>
-                    </div>
-                  ))}
+
+                        <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+                          <span className="font-semibold">Hệ thống đã dựa vào mô hình dự đoán tuần và nguồn đã xác minh.</span>
+                          {!isResolved && (
+                            <span className="text-sky-700 font-bold">Bạn còn 1 lựa chọn chưa lưu.</span>
+                          )}
+                        </div>
+
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-slate-100">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedInviteForWhy(inv)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold cursor-pointer border border-blue-200/60 transition-all self-start sm:self-auto"
+                          >
+                            <HelpCircle className="w-3.5 h-3.5 text-blue-600" />
+                            <span>Vì sao gợi ý này?</span>
+                          </button>
+
+                          {inv.status === 'sent' ? (
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <button
+                                onClick={() => handleRespondInvite(inv.id, 'accepted')}
+                                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs cursor-pointer shadow-xs transition-all"
+                              >
+                                Áp dụng giải pháp
+                              </button>
+                              <button
+                                onClick={() => handleRespondInvite(inv.id, 'snoozed')}
+                                className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer transition-all"
+                              >
+                                Hoãn 3 ngày
+                              </button>
+                              <button
+                                onClick={() => handleRespondInvite(inv.id, 'declined')}
+                                className="px-3 py-2 rounded-xl text-slate-400 hover:text-slate-600 font-bold text-xs cursor-pointer transition-all"
+                              >
+                                Từ chối
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="text-xs font-semibold text-emerald-600">
+                              Đã lưu phản hồi: {statusLabel}
+                            </div>
+                          )}
+                        </div>
+                      </motion.div>
+                    );
+                  })}
                 </div>
               )}
             </motion.div>
@@ -2146,7 +2470,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                       {assignedMentor.isLeadMentor ? ' (GVHD)' : ''}. Mentor sẽ thấy yêu cầu ở mục «Yêu cầu hỗ trợ» với cùng trạng thái.
                     </p>
                   ) : (
-                    <p className="text-slate-600">Chưa được Admin gán mentor. Bạn vẫn gửi được yêu cầu; mentor chỉ thấy sau khi có mentor_assignments.</p>
+                    <p className="text-slate-600">Bạn vẫn có thể gửi yêu cầu hỗ trợ. Người hướng dẫn sẽ xem được sau khi được phân công.</p>
                   )}
                 </div>
                 <form onSubmit={handleSendSupportRequest} className="space-y-4">
@@ -2227,7 +2551,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                 <div>
                   <h3 className="text-xl font-bold text-slate-900">Bạn đồng hành (buddy)</h3>
                   <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                    Theo bảng 7.2, thiếu người đồng hành là một rào cản. Lời mời dùng mã HS; mentor có thể xác nhận cặp đã chấp nhận. Không công khai điểm nguy cơ cho bạn tập.
+                    Có một người cùng học hoặc luyện tập có thể giúp bạn duy trì thói quen. Bạn có thể gửi lời mời và chờ người hướng dẫn xác nhận.
                   </p>
                 </div>
                 <form
@@ -2397,6 +2721,8 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                     />
                   </div>
 
+                  {weekStatusError && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{weekStatusError}</p>}
+
                   <button
                     type="submit"
                     className="w-full py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs cursor-pointer shadow-md transition-all flex items-center justify-center gap-2"
@@ -2411,7 +2737,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
               <div className="lg:col-span-5 bg-white p-6 rounded-3xl border border-slate-200/90 shadow-xs space-y-4">
                 <h3 className="text-base font-bold text-slate-900">Lịch sử xác nhận tuần</h3>
                 {weeklyStatuses.length === 0 ? (
-                  <p className="text-xs text-slate-400 py-6 text-center">Chưa có bản ghi xác nhận tuần nào trong CSDL.</p>
+                  <p className="text-xs text-slate-400 py-6 text-center">Bạn chưa xác nhận tuần nào.</p>
                 ) : (
                   <div className="space-y-3">
                     {weeklyStatuses.map((ws, i) => (
@@ -2565,7 +2891,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                       <span>Phụ huynh/người giám hộ đã xác nhận (nếu nhà trường yêu cầu).</span>
                     </label>
                     <button type="submit" className="px-4 py-2 rounded-xl bg-sky-100 text-sky-800 text-xs font-bold cursor-pointer hover:bg-sky-200">
-                      Ghi đồng ý vào CSDL
+                      Lưu lựa chọn của tôi
                     </button>
                   </form>
                 )}
@@ -2735,7 +3061,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
         <DetailSheet
           open={detailKind === 'logs' || detailKind === 'week'}
           title={detailKind === 'week' ? `Nhật ký tuần ${detailFilter}` : 'Danh sách nhật ký'}
-          subtitle="Các bản ghi session_logs cấu thành số trên thẻ/biểu đồ. Bấm một dòng để xem đủ trường."
+          subtitle="Các buổi bạn ghi nhận được dùng để tổng hợp tiến độ. Chọn một dòng để xem chi tiết."
           onClose={() => setDetailKind(null)}
         >
           {(detailKind === 'week'

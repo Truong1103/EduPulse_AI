@@ -8,8 +8,29 @@ declare
   research_support_definition text;
   student_status_definition text;
   mentor_status_definition text;
+  weekly_pipeline_definition text;
+  weekly_prediction_definition text;
   outcomes_view_definition text;
 begin
+  if not has_table_privilege('authenticated', 'public.plan_tasks', 'select') then
+    raise exception 'Students must be able to read their own RLS-protected plan tasks.';
+  end if;
+  if has_table_privilege('anon', 'public.plan_tasks', 'select') then
+    raise exception 'Anonymous users must not read plan tasks.';
+  end if;
+  if not exists (
+    select 1 from pg_class c
+    where c.oid = 'public.plan_tasks'::regclass and c.relrowsecurity
+  ) then
+    raise exception 'Plan tasks must have row-level security enabled.';
+  end if;
+  if (select count(*) from pg_policies p
+      where p.schemaname = 'public'
+        and p.tablename = 'plan_tasks'
+        and p.policyname in ('plan_tasks_select_own', 'plan_tasks_insert_own', 'plan_tasks_update_own', 'plan_tasks_delete_own')) <> 4 then
+    raise exception 'Plan task owner policies are incomplete.';
+  end if;
+
   if has_table_privilege('authenticated', 'public.study_outcome_events', 'select') then
     raise exception 'Authenticated must not read raw study_outcome_events.';
   end if;
@@ -41,6 +62,12 @@ begin
   if not has_function_privilege('authenticated', 'public.get_admin_data_quality_summary()', 'execute') then
     raise exception 'Authenticated must be able to call the guarded Admin quality RPC.';
   end if;
+  if not has_function_privilege('authenticated', 'public.admin_run_weekly_pipeline(date)', 'execute') then
+    raise exception 'Authenticated Admins must be able to run the guarded weekly pipeline.';
+  end if;
+  if has_function_privilege('anon', 'public.admin_run_weekly_pipeline(date)', 'execute') then
+    raise exception 'Anonymous users must not run the weekly pipeline.';
+  end if;
   if has_function_privilege('anon', 'public.get_admin_data_quality_summary()', 'execute') then
     raise exception 'Anonymous users must not call Admin quality statistics.';
   end if;
@@ -62,6 +89,22 @@ begin
   if has_table_privilege('authenticated', 'public.weekly_status', 'insert')
      or has_table_privilege('authenticated', 'public.weekly_status', 'update') then
     raise exception 'Weekly status writes must go through the outcome-history RPCs.';
+  end if;
+
+  select pg_get_functiondef('public.admin_run_weekly_pipeline(date)'::regprocedure)
+    into weekly_pipeline_definition;
+  if position('admin_calculate_weekly_summary' in lower(weekly_pipeline_definition)) = 0
+     or position('run_weekly_prediction' in lower(weekly_pipeline_definition)) = 0
+     or position('date_trunc(''week''' in lower(weekly_pipeline_definition)) = 0 then
+    raise exception 'Weekly pipeline must validate Monday and run summary before prediction.';
+  end if;
+
+  select pg_get_functiondef('public.run_weekly_prediction(date)'::regprocedure)
+    into weekly_prediction_definition;
+  if position('summary_weeks < 2' in lower(weekly_prediction_definition)) = 0
+     or position('logs_14d < 3' in lower(weekly_prediction_definition)) = 0
+     or position('insufficient_data' in lower(weekly_prediction_definition)) = 0 then
+    raise exception 'Weekly prediction must mark insufficient observations and avoid risk flags.';
   end if;
   if has_function_privilege('anon', 'public.save_research_analysis_snapshot(text,jsonb,jsonb)', 'execute') then
     raise exception 'Anonymous users must not save analysis snapshots.';
@@ -119,8 +162,8 @@ begin
   select pg_get_functiondef('public.confirm_student_weekly_status(date,text,text)'::regprocedure)
     into student_status_definition;
   if position('public.jwt_role() <> ''student''' in lower(student_status_definition)) = 0
-     or position('student_id uuid := auth.uid()' in lower(student_status_definition)) = 0
-     or position('p.id = student_id' in lower(student_status_definition)) = 0
+    or position('v_student_id uuid := auth.uid()' in lower(student_status_definition)) = 0
+    or position('p.id = v_student_id' in lower(student_status_definition)) = 0
      or position('insert into public.study_outcome_events' in lower(student_status_definition)) = 0
      or position('c.withdrawn_at is null' in lower(student_status_definition)) = 0 then
     raise exception 'Student self-confirmation RPC lost its role/consent guard or outcome history write.';

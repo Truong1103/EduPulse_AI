@@ -158,10 +158,18 @@ export interface ConsentRecord {
 }
 
 // Goal
+export type PlanningPriority = 'low' | 'medium' | 'high';
+export type PlanningStatus = 'not_started' | 'in_progress' | 'completed';
+
 export interface Goal {
   id: string;
   studentId: string;
   studentCode?: string;
+  planTitle: string;
+  description: string;
+  startDate: string;
+  priority: PlanningPriority;
+  planningStatus: PlanningStatus;
   activityGroup: string; // Học tập, Ngoại ngữ, Thể thao, Nghệ thuật, Kỹ năng
   targetDate: string;
   successCriteria: string;
@@ -184,6 +192,20 @@ export interface PlanVersion {
     task: string;
   }[];
   reason?: string;
+  createdAt: string;
+}
+
+export interface PlanTask {
+  id: string;
+  goalId: string;
+  studentId: string;
+  title: string;
+  description: string;
+  dueDate?: string;
+  priority: PlanningPriority;
+  status: PlanningStatus;
+  completed: boolean;
+  position: number;
   createdAt: string;
 }
 
@@ -273,6 +295,8 @@ export interface SupportInvite {
   studentCode?: string;
   predictionId?: string;
   contentId: string;
+  barrier?: string;
+  priority?: 'high' | 'medium' | 'low';
   contentTitle: string;
   contentBody: string;
   sourceId?: string;

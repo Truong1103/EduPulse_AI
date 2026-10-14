@@ -117,6 +117,12 @@ create table if not exists public.data_requests (
 create table if not exists public.goals (
   id                uuid primary key default gen_random_uuid(),
   student_id        uuid not null references public.profiles(id) on delete cascade,
+  plan_title        text not null,
+  plan_description  text not null default '',
+  start_date        date not null default current_date,
+  priority          text not null default 'medium' check (priority in ('low', 'medium', 'high')),
+  planning_status   text not null default 'in_progress' check (planning_status in ('not_started', 'in_progress', 'completed')),
+  archived_at       timestamptz,
   activity_group    text not null,             -- Học tập, Ngoại ngữ, Thể thao, Nghệ thuật, Kỹ năng
   target_date       date not null,
   success_criteria  text not null,
@@ -137,6 +143,23 @@ create table if not exists public.plan_versions (
   reason            text,                      -- Lý do điều chỉnh kế hoạch
   created_at        timestamptz not null default now()
 );
+
+create table if not exists public.plan_tasks (
+  id          uuid primary key default gen_random_uuid(),
+  goal_id     uuid not null references public.goals(id) on delete cascade,
+  student_id  uuid not null references public.profiles(id) on delete cascade,
+  title       text not null check (length(trim(title)) > 0),
+  description text not null default '',
+  due_date    date,
+  priority    text not null default 'medium' check (priority in ('low', 'medium', 'high')),
+  status      text not null default 'not_started' check (status in ('not_started', 'in_progress', 'completed')),
+  completed   boolean not null default false,
+  position    integer not null default 0,
+  created_at  timestamptz not null default now()
+);
+
+create index if not exists plan_tasks_goal_position_idx
+  on public.plan_tasks (goal_id, position, created_at);
 
 -- ----------------------------------------------------------------------------
 -- 4. NHẬT KÝ LUYỆN TẬP & TRẠNG THÁI TUẦN
@@ -885,6 +908,7 @@ alter table public.consents enable row level security;
 alter table public.data_requests enable row level security;
 alter table public.goals enable row level security;
 alter table public.plan_versions enable row level security;
+alter table public.plan_tasks enable row level security;
 alter table public.session_logs enable row level security;
 alter table public.rest_periods enable row level security;
 alter table public.weekly_status enable row level security;
@@ -967,6 +991,44 @@ drop policy if exists student_create_plan on public.plan_versions;
 create policy student_create_plan on public.plan_versions
   for insert to authenticated
   with check (student_id = (select auth.uid()) or (select public.jwt_role()) = 'admin');
+
+drop policy if exists plan_tasks_select_own on public.plan_tasks;
+create policy plan_tasks_select_own on public.plan_tasks
+  for select to authenticated
+  using (student_id = (select auth.uid()) and (select public.jwt_role()) = 'student');
+
+drop policy if exists plan_tasks_insert_own on public.plan_tasks;
+create policy plan_tasks_insert_own on public.plan_tasks
+  for insert to authenticated
+  with check (
+    student_id = (select auth.uid())
+    and (select public.jwt_role()) = 'student'
+    and exists (
+      select 1 from public.goals g
+      where g.id = goal_id and g.student_id = (select auth.uid())
+    )
+  );
+
+drop policy if exists plan_tasks_update_own on public.plan_tasks;
+create policy plan_tasks_update_own on public.plan_tasks
+  for update to authenticated
+  using (student_id = (select auth.uid()) and (select public.jwt_role()) = 'student')
+  with check (
+    student_id = (select auth.uid())
+    and (select public.jwt_role()) = 'student'
+    and exists (
+      select 1 from public.goals g
+      where g.id = goal_id and g.student_id = (select auth.uid())
+    )
+  );
+
+drop policy if exists plan_tasks_delete_own on public.plan_tasks;
+create policy plan_tasks_delete_own on public.plan_tasks
+  for delete to authenticated
+  using (student_id = (select auth.uid()) and (select public.jwt_role()) = 'student');
+
+revoke all on public.plan_tasks from public, anon;
+grant select, insert, update, delete on public.plan_tasks to authenticated;
 
 -- POLICIES CHO SESSION LOGS (Nhật ký phiên rèn luyện)
 drop policy if exists session_logs_select on public.session_logs;
