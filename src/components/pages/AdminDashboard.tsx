@@ -552,6 +552,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
     }
   };
 
+  const getRoleBadge = (role: AppRole, isLead?: boolean) => {
+    switch (role) {
+      case 'admin':
+        return <span className="px-2.5 py-1 rounded-full bg-sky-50 text-sky-800 border border-sky-200 font-bold text-[10px]">Quản trị viên (Admin)</span>;
+      case 'mentor':
+        return (
+          <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${isLead ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-emerald-100 text-emerald-800'}`}>
+            {isLead ? 'GVHD / Cố vấn trưởng' : 'Người hướng dẫn'}
+          </span>
+        );
+      case 'researcher':
+        return <span className="px-2.5 py-1 rounded-full bg-purple-100 text-purple-800 font-bold text-[10px]">Nhà nghiên cứu</span>;
+      default:
+        return <span className="px-2.5 py-1 rounded-full bg-blue-100 text-blue-800 font-bold text-[10px]">Học sinh</span>;
+    }
+  };
+
   return (
     <>
     <RoleWorkspace
@@ -697,7 +714,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
                   Chưa tìm thấy người dùng phù hợp với bộ lọc tìm kiếm.
                 </div>
               ) : (
-                <div className="overflow-x-auto rounded-2xl border border-slate-200/80">
+                <>
+                <div className="hidden xl:block rounded-2xl border border-slate-200/80">
                   <table className="w-full text-xs text-left">
                     <thead className="bg-slate-50 uppercase font-bold text-slate-600 border-b border-slate-200">
                       <tr>
@@ -710,23 +728,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
                     </thead>
                     <tbody className="divide-y divide-slate-100 bg-white">
                       {filteredProfiles.map((p) => {
-                        const getRoleBadge = (role: AppRole, isLead?: boolean) => {
-                          switch (role) {
-                            case 'admin':
-                              return <span className="px-2.5 py-1 rounded-full bg-sky-50 text-sky-800 border border-sky-200 font-bold text-[10px]">Quản trị viên (Admin)</span>;
-                            case 'mentor':
-                              return (
-                                <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${isLead ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-emerald-100 text-emerald-800'}`}>
-                                  {isLead ? 'GVHD / Cố vấn trưởng' : 'Người hướng dẫn'}
-                                </span>
-                              );
-                            case 'researcher':
-                              return <span className="px-2.5 py-1 rounded-full bg-purple-100 text-purple-800 font-bold text-[10px]">Nhà nghiên cứu</span>;
-                            default:
-                              return <span className="px-2.5 py-1 rounded-full bg-blue-100 text-blue-800 font-bold text-[10px]">Học sinh</span>;
-                          }
-                        };
-
                         return (
                           <tr key={p.id} className="hover:bg-slate-50/80 transition-colors align-middle">
                             <td className="py-3.5 px-4">
@@ -785,6 +786,58 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
                     </tbody>
                   </table>
                 </div>
+                <div className="space-y-3 xl:hidden">
+                  {filteredProfiles.map((p) => (
+                    <article key={p.id} className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-xs">
+                      <div className="flex min-w-0 items-start justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sky-100 font-bold text-sky-700">
+                            {(p.ten || p.fullName || p.gmail || p.email || 'U')[0].toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="break-words text-sm font-bold text-slate-900">{p.ten || p.fullName || 'Người dùng Google'}</p>
+                            <p className="break-all text-[11px] text-slate-500">{p.gmail || p.email}</p>
+                          </div>
+                        </div>
+                        <div className="shrink-0">{getRoleBadge(p.role, p.isLeadMentor)}</div>
+                      </div>
+                      <dl className="grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-3 text-xs">
+                        <div>
+                          <dt className="text-[10px] font-semibold uppercase text-slate-500">Mã HS / Phụ trách</dt>
+                          <dd className="mt-1 break-words font-semibold text-slate-800">{p.studentCode || (p.isLeadMentor ? 'Cố vấn trưởng (Lead)' : '—')}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-[10px] font-semibold uppercase text-slate-500">Trạng thái</dt>
+                          <dd className="mt-1 inline-flex items-center gap-1 font-semibold text-emerald-700">
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                            {p.status || 'Hoạt động'}
+                          </dd>
+                        </div>
+                      </dl>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenRoleModal(p)}
+                          className="min-h-11 flex-1 rounded-xl bg-sky-100 px-3 py-2 text-xs font-bold text-sky-800 cursor-pointer"
+                        >
+                          Cấp vai trò
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedUserForDeletion(p);
+                            setConfirmDeleteEmail('');
+                          }}
+                          className="min-h-11 flex-1 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 cursor-pointer"
+                          aria-label={`Xóa tài khoản ${p.email}`}
+                        >
+                          Xóa
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+                </>
               )}
             </div>
 
@@ -862,7 +915,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
               </div>
 
               {invites.length > 0 && (
-                <div className="mt-4 overflow-x-auto">
+                <>
+                <div className="mt-4 hidden xl:block">
                   <table className="w-full text-xs text-left">
                     <thead className="bg-slate-50 uppercase font-bold text-slate-500 border-y border-slate-200">
                       <tr>
@@ -891,6 +945,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
                     </tbody>
                   </table>
                 </div>
+                <div className="mt-4 space-y-2 xl:hidden">
+                  {invites.map((inv) => (
+                    <article key={inv.id} className="space-y-3 rounded-xl border border-slate-200 bg-white p-3.5">
+                      <div className="min-w-0">
+                        <p className="text-[10px] font-semibold uppercase text-slate-500">Email</p>
+                        <p className="break-all text-xs font-bold font-mono text-slate-900">{inv.email}</p>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 text-xs">
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase text-slate-500">Vai trò dự kiến</p>
+                          <p className="mt-1 font-semibold uppercase text-slate-700">{inv.role}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase text-slate-500">Mã HS</p>
+                          <p className="mt-1 text-slate-700">{inv.studentCode || '—'}</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleRevokeInvite(inv.id, inv.email)}
+                        className="min-h-11 w-full rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 cursor-pointer"
+                      >
+                        Thu hồi lời mời
+                      </button>
+                    </article>
+                  ))}
+                </div>
+                </>
               )}
             </div>
           </div>
@@ -1226,8 +1308,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
                   Chưa có cặp phân công nào. Chọn mentor và học sinh ở form trên để tạo mới.
                 </div>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[720px] text-left text-xs">
+                <>
+                <div className="hidden xl:block">
+                  <table className="w-full text-left text-xs">
                     <thead>
                       <tr className="border-b border-slate-200 text-[10px] uppercase tracking-wide text-slate-500">
                         <th className="p-3 font-bold">Người hướng dẫn</th>
@@ -1279,6 +1362,49 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
                     </tbody>
                   </table>
                 </div>
+                <div className="space-y-3 xl:hidden">
+                  {mentorAssignments.map((assignment) => (
+                    <article key={`${assignment.mentorId}-${assignment.studentId}`} className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-xs">
+                      <div className="grid grid-cols-2 gap-3 text-xs">
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-semibold uppercase text-slate-500">Người hướng dẫn</p>
+                          <p className="mt-1 break-words font-bold text-slate-900">{assignment.mentorName}</p>
+                          <p className="break-all text-[10px] text-slate-500">{assignment.mentorEmail}</p>
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-semibold uppercase text-slate-500">Học sinh</p>
+                          <p className="mt-1 break-words font-bold text-slate-900">{assignment.studentName}</p>
+                          <p className="break-words text-[10px] text-slate-500">{assignment.studentCode || 'Chưa có mã HS'}</p>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 text-xs">
+                        <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${assignment.mentorIsLead ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>
+                          {assignment.mentorIsLead ? 'GVHD / Cố vấn trưởng' : 'Người hướng dẫn'}
+                        </span>
+                        <span className="text-slate-500">Từ {new Date(assignment.assignedAt).toLocaleDateString('vi-VN')}</span>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleEditAssignment(assignment)}
+                          className="min-h-11 flex-1 rounded-xl bg-sky-50 px-3 py-2 text-xs font-bold text-sky-700 cursor-pointer"
+                          aria-label="Chỉnh sửa phân công"
+                        >
+                          Sửa phân công
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteAssignment(assignment)}
+                          className="min-h-11 flex-1 rounded-xl bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 cursor-pointer"
+                          aria-label="Xóa phân công"
+                        >
+                          Xóa
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+                </>
               )}
             </div>
           </div>
@@ -1297,7 +1423,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
             {contacts.length === 0 ? (
               <p className="text-xs text-slate-400 py-6 text-center">Chưa có học sinh nào trong danh bạ liên hệ.</p>
             ) : (
-              <div className="overflow-x-auto">
+              <>
+              <div className="hidden xl:block">
                 <table className="w-full text-xs text-left">
                   <thead className="bg-slate-50 uppercase font-bold text-slate-600 border-y border-slate-200">
                     <tr>
@@ -1331,6 +1458,44 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
                   </tbody>
                 </table>
               </div>
+              <div className="space-y-3 xl:hidden">
+                {contacts.map((c) => {
+                  const isViewed = Boolean(unmaskedContacts[c.studentId]);
+                  return (
+                    <article key={c.studentId} className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-xs">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-semibold uppercase text-slate-500">Mã học sinh</p>
+                          <p className="mt-1 break-all font-mono text-sm font-bold text-blue-700">{c.studentCode}</p>
+                        </div>
+                        <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-bold text-amber-800">Danh bạ bảo mật</span>
+                      </div>
+                      <dl className="grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-3 text-xs">
+                        <div>
+                          <dt className="text-[10px] font-semibold uppercase text-slate-500">Họ tên</dt>
+                          <dd className="mt-1 break-words font-medium text-slate-800">{isViewed ? c.fullName : '••••••••••••'}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-[10px] font-semibold uppercase text-slate-500">Lớp</dt>
+                          <dd className="mt-1 break-words text-slate-800">{c.className || '—'}</dd>
+                        </div>
+                        <div className="col-span-2">
+                          <dt className="text-[10px] font-semibold uppercase text-slate-500">Số điện thoại</dt>
+                          <dd className="mt-1 font-mono text-slate-800">{isViewed ? c.phone : '0905 ••• •••'}</dd>
+                        </div>
+                      </dl>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleViewContact(c.studentId, c.studentCode)}
+                        className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 cursor-pointer"
+                      >
+                        {isViewed ? 'Ẩn liên hệ' : 'Xem và ghi audit'}
+                      </button>
+                    </article>
+                  );
+                })}
+              </div>
+              </>
             )}
           </div>
         )}

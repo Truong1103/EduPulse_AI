@@ -227,7 +227,7 @@ export const RegisterOnboardingPage: React.FC<RegisterOnboardingPageProps> = ({
                     {daysPerWeek} buổi / tuần
                   </span>
                 </div>
-                <div className="grid grid-cols-5 gap-2">
+                <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
                   {[1, 2, 3, 4, 5].map((d) => (
                     <button
                       key={d}
@@ -254,7 +254,7 @@ export const RegisterOnboardingPage: React.FC<RegisterOnboardingPageProps> = ({
                     {durationMins} phút
                   </span>
                 </div>
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                   {[20, 30, 45, 60].map((m) => (
                     <button
                       key={m}

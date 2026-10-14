@@ -65,8 +65,8 @@ export const Navbar: React.FC<NavbarProps> = ({
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between">
         {/* Brand Logo */}
         <div
-          onClick={() => handleNavigate('landing')}
-          className="flex items-center gap-3 cursor-pointer group"
+          onClick={isRolePage ? undefined : () => handleNavigate('landing')}
+          className={`flex items-center gap-3 ${isRolePage ? 'cursor-default' : 'cursor-pointer group'}`}
         >
           <div className="relative flex items-center justify-center w-10 h-10 rounded-2xl bg-sky-500 text-white shadow-md shadow-sky-500/20 group-hover:scale-105 transition-transform">
             <Sparkles className="w-5 h-5 text-white" />
@@ -81,14 +81,14 @@ export const Navbar: React.FC<NavbarProps> = ({
                 AI
               </span>
             </div>
-            <p className="text-[10px] text-slate-500 font-medium hidden sm:block">
+            <p className="text-[10px] text-slate-500 font-medium hidden xl:block">
               Đồng hành mục tiêu học tập bền vững
             </p>
           </div>
         </div>
 
         {/* Desktop Navigation */}
-        <nav className="hidden md:flex items-center gap-1 bg-slate-100 p-1 rounded-full border border-slate-200">
+        {!isRolePage && <nav className="hidden xl:flex items-center gap-1 bg-slate-100 p-1 rounded-full border border-slate-200">
           {navLinks.map((item) => {
             const Icon = item.icon;
             const isActive = currentRoute === item.route;
@@ -107,10 +107,10 @@ export const Navbar: React.FC<NavbarProps> = ({
               </button>
             );
           })}
-        </nav>
+        </nav>}
 
         {/* Right CTA / Auth controls */}
-        <div className="hidden sm:flex items-center gap-3">
+        <div className="hidden xl:flex items-center gap-3">
           {currentUser ? (
             <div className="flex items-center gap-2.5">
               {/* If user is admin, allow quick inspection of other role views */}
@@ -192,20 +192,33 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
 
         {/* Mobile menu hamburger button */}
-        <div className="flex md:hidden items-center gap-2">
-          <button
-            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="p-2 text-slate-700 bg-white border border-slate-200 rounded-xl shadow-xs hover:bg-slate-50 transition-colors focus:outline-none"
-            aria-label="Mở menu"
-          >
-            {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-          </button>
+        <div className="flex xl:hidden items-center gap-2">
+          {isRolePage ? (
+            currentUser && (
+              <button
+                onClick={handleSignOut}
+                className="p-2 text-slate-700 bg-white border border-slate-200 rounded-xl shadow-xs hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                aria-label="Đăng xuất"
+                title="Đăng xuất"
+              >
+                <LogOut className="w-5 h-5" />
+              </button>
+            )
+          ) : (
+            <button
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="p-2 text-slate-700 bg-white border border-slate-200 rounded-xl shadow-xs hover:bg-slate-50 transition-colors focus:outline-none"
+              aria-label="Mở menu"
+            >
+              {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+            </button>
+          )}
         </div>
       </div>
 
       {/* Mobile Drawer */}
-      {mobileMenuOpen && (
-        <div className="md:hidden fixed inset-x-0 top-[70px] bg-white border-b border-slate-200 shadow-2xl p-5 animate-in slide-in-from-top duration-200">
+      {!isRolePage && mobileMenuOpen && (
+        <div className="xl:hidden fixed inset-x-0 top-[70px] max-h-[calc(100vh-70px)] overflow-y-auto bg-white border-b border-slate-200 shadow-2xl p-5 animate-in slide-in-from-top duration-200">
           <div className="space-y-2.5">
             {navLinks.map((item) => {
               const Icon = item.icon;

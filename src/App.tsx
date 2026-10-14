@@ -152,7 +152,7 @@ function AppContent() {
       <Navbar currentRoute={currentRoute} onRouteChange={navigateTo} />
 
       {/* Main Content Router with Smooth Page Entrance & Transition */}
-      <main className="flex-1">
+      <main className="min-w-0 flex-1">
         <AnimatePresence mode="wait">
           <motion.div
             key={currentRoute}

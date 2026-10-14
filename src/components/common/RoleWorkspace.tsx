@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertCircle, LucideIcon, RefreshCw } from 'lucide-react';
+import { AlertCircle, ChevronDown, LucideIcon, RefreshCw } from 'lucide-react';
 
 export type WorkspaceAccent = 'sky' | 'emerald' | 'purple' | 'slate';
 
@@ -80,20 +80,20 @@ export const RoleWorkspace: React.FC<RoleWorkspaceProps> = ({
   const theme = ACCENT[accent];
 
   return (
-    <div className="min-h-screen bg-slate-50 pb-16 pt-24 px-3 sm:px-6 lg:px-8">
-      <div className="max-w-[1400px] mx-auto space-y-5">
-        <header className={`bg-white/95 rounded-3xl p-5 sm:p-7 border ${theme.ring} shadow-sm`}>
+    <div className="min-h-screen bg-slate-50 pb-12 sm:pb-16 pt-20 sm:pt-24 px-2.5 sm:px-6 lg:px-8">
+      <div className="max-w-[1400px] min-w-0 mx-auto space-y-4 sm:space-y-5">
+        <header className={`min-w-0 bg-white/95 rounded-2xl sm:rounded-3xl p-4 sm:p-7 border ${theme.ring} shadow-sm`}>
           <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-5">
-            <div className="min-w-0 space-y-2.5">
-              {badges && <div className="flex flex-wrap items-center gap-2">{badges}</div>}
-              <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 font-display">
+            <div className="min-w-0 space-y-2.5" style={{ overflowWrap: 'anywhere' }}>
+              {badges && <div className="flex min-w-0 flex-wrap items-center gap-2">{badges}</div>}
+              <h1 className="break-words text-xl sm:text-3xl font-extrabold tracking-tight text-slate-900 font-display">
                 {title}
               </h1>
-              <div className="text-sm text-slate-600 max-w-3xl leading-relaxed">{subtitle}</div>
+              <div className="max-w-3xl text-sm text-slate-600 leading-relaxed">{subtitle}</div>
             </div>
-            {actions && <div className="flex flex-wrap items-center gap-2 shrink-0">{actions}</div>}
+            {actions && <div className="flex w-full flex-wrap items-center gap-2 xl:w-auto xl:shrink-0">{actions}</div>}
           </div>
-          {stats && <div className="mt-5 pt-5 border-t border-slate-100">{stats}</div>}
+          {stats && <div className="mt-5 min-w-0 pt-5 border-t border-slate-100">{stats}</div>}
         </header>
 
         {notice}
@@ -128,8 +128,27 @@ export const RoleWorkspace: React.FC<RoleWorkspaceProps> = ({
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)] gap-4 lg:gap-6 items-start">
-          <nav className={`lg:sticky lg:top-24 ${theme.nav} rounded-2xl border shadow-xs p-2 flex lg:flex-col gap-1.5 overflow-x-auto lg:overflow-visible`}>
+        <div className="grid min-w-0 grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)] gap-4 lg:gap-6 items-start">
+          {tabs.length > 0 && (
+            <div className="relative lg:hidden">
+              <label className="sr-only" htmlFor="role-workspace-section">Chọn danh mục</label>
+              <select
+                id="role-workspace-section"
+                value={activeTab}
+                onChange={(event) => onTabChange(event.target.value)}
+                className="h-12 w-full appearance-none rounded-xl border border-slate-200 bg-white pl-4 pr-10 text-sm font-semibold text-slate-700 shadow-xs focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100"
+              >
+                {tabs.map((tab) => (
+                  <option key={tab.id} value={tab.id}>
+                    {tab.label}{typeof tab.badge === 'number' && tab.badge > 0 ? ` (${tab.badge})` : ''}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+            </div>
+          )}
+
+          <nav className={`hidden lg:sticky lg:top-24 lg:flex lg:flex-col gap-1.5 ${theme.nav} rounded-2xl border shadow-xs p-2`}>
             {tabs.map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
@@ -138,7 +157,7 @@ export const RoleWorkspace: React.FC<RoleWorkspaceProps> = ({
                   key={tab.id}
                   type="button"
                   onClick={() => onTabChange(tab.id)}
-                  className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium whitespace-nowrap transition-all cursor-pointer text-left border ${
+                  className={`flex shrink-0 items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium whitespace-nowrap transition-all cursor-pointer text-left border ${
                     isActive ? `${theme.active} border-sky-200` : 'text-slate-600 border-transparent hover:text-slate-900 hover:bg-slate-50'
                   }`}
                 >
