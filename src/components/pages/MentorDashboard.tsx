@@ -133,8 +133,13 @@ export const MentorDashboard: React.FC<MentorDashboardProps> = ({ isLeadMentor, 
       setSupportRequests(srData);
       setBuddyPairs(buddyData);
       const approvedTemplates = tmplData.filter((template) => template.status === 'approved');
-      setTemplates(approvedTemplates);
-      setSelectedTemplate(approvedTemplates[0]?.id || '');
+      setTemplates([
+        ...approvedTemplates,
+        ...tmplData.filter((template) => template.status !== 'approved')
+      ]);
+      setSelectedTemplate((selected) => approvedTemplates.some((template) => template.id === selected)
+        ? selected
+        : approvedTemplates[0]?.id || '');
       if (stData.length > 0) setTargetStudentCode(stData[0].student_code);
 
       if (isLeadMentor) {
@@ -279,7 +284,8 @@ export const MentorDashboard: React.FC<MentorDashboardProps> = ({ isLeadMentor, 
   const handleSendEncouragement = async (e: React.FormEvent) => {
     e.preventDefault();
     const st = students.find((s) => s.student_code === targetStudentCode);
-    if (!st || !selectedTemplate) {
+    const selectedContent = templates.find((template) => template.id === selectedTemplate);
+    if (!st || !selectedContent || selectedContent.status !== 'approved') {
       onAddToast('Lưu ý', 'Vui lòng chọn học sinh và mẫu thông điệp.', 'warning');
       return;
     }
@@ -743,12 +749,22 @@ export const MentorDashboard: React.FC<MentorDashboardProps> = ({ isLeadMentor, 
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Chọn mẫu thông điệp</label>
+                {templates.length === 0 ? (
+                  <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                    Chưa có nội dung trong thư viện. Admin cần tạo nội dung và xác minh nguồn khoa học trước khi duyệt.
+                  </div>
+                ) : !templates.some((template) => template.status === 'approved') ? (
+                  <div role="status" className="mb-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                    Các mẫu bên dưới đang là bản nháp nên chưa thể gửi. Admin cần xác minh nguồn khoa học rồi duyệt mẫu; sau đó mẫu sẽ tự xuất hiện ở đây để gửi.
+                  </div>
+                ) : null}
                 <div className="space-y-2">
                   {templates.slice(0, 4).map((item) => (
                     <label
                       key={item.id}
-                      className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition-all ${
-                        selectedTemplate === item.id ? 'bg-emerald-50 border-emerald-300' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                      className={`flex items-start gap-2.5 p-3 rounded-xl border transition-all ${
+                        item.status !== 'approved' ? 'cursor-not-allowed bg-slate-50 border-slate-200 opacity-80' :
+                        selectedTemplate === item.id ? 'cursor-pointer bg-emerald-50 border-emerald-300' : 'cursor-pointer bg-slate-50 border-slate-200 hover:bg-slate-100'
                       }`}
                     >
                       <input
@@ -756,11 +772,15 @@ export const MentorDashboard: React.FC<MentorDashboardProps> = ({ isLeadMentor, 
                         name="template"
                         checked={selectedTemplate === item.id}
                         onChange={() => setSelectedTemplate(item.id)}
+                        disabled={item.status !== 'approved'}
                         className="mt-1"
                       />
                       <div className="text-xs">
                         <strong className="text-slate-900 block">{item.title}</strong>
                         <span className="text-slate-600 block mt-0.5">{item.body}</span>
+                        <span className={`mt-1 inline-block font-semibold ${item.status === 'approved' ? 'text-emerald-700' : 'text-amber-700'}`}>
+                          {item.status === 'approved' ? 'Đã duyệt · có thể gửi' : 'Bản nháp · chờ Admin duyệt'}
+                        </span>
                       </div>
                     </label>
                   ))}
@@ -769,6 +789,7 @@ export const MentorDashboard: React.FC<MentorDashboardProps> = ({ isLeadMentor, 
 
               <button
                 type="submit"
+                disabled={!templates.some((template) => template.id === selectedTemplate && template.status === 'approved')}
                 className="w-full py-3 rounded-2xl bg-sky-100 hover:bg-sky-200 text-sky-800 font-bold text-xs cursor-pointer transition-all"
               >
                 Gửi thông điệp khích lệ
