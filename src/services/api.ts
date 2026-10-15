@@ -1697,15 +1697,19 @@ export async function getContactsWithAudit(adminId?: string): Promise<StudentCon
 
   throwIfError(error, 'Không tải được danh bạ liên hệ.');
   if (!data) return [];
-  return data.map((c) => ({
-    studentId: c.student_id,
-    studentCode: c.profiles?.[0]?.student_code || 'Chưa có mã',
-    fullName: c.full_name,
-    className: c.class_name,
-    phone: '',
-    email: '',
-    guardianContact: ''
-  }));
+  return data.map((c) => {
+    const profile = c.profiles as unknown as { student_code?: string } | { student_code?: string }[] | null;
+    const studentCode = Array.isArray(profile) ? profile[0]?.student_code : profile?.student_code;
+    return {
+      studentId: c.student_id,
+      studentCode: studentCode || 'Chưa có mã',
+      fullName: c.full_name,
+      className: c.class_name,
+      phone: '',
+      email: '',
+      guardianContact: ''
+    };
+  });
 }
 
 export async function getContactPhoneWithAudit(studentId: string, studentCode: string, adminId?: string): Promise<string | null> {
