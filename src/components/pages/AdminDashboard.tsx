@@ -52,7 +52,7 @@ import {
   createInvitedUser,
   revokeInvitedUser,
   getContactsWithAudit,
-  logSingleContactView,
+  getContactPhoneWithAudit,
   getSupportContentLibrary,
   createSupportContent,
   getAppSettings,
@@ -127,10 +127,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
   const [evidenceSources, setEvidenceSources] = useState<EvidenceSource[]>([]);
   const [invites, setInvites] = useState<InvitedUser[]>([]);
   const [contacts, setContacts] = useState<StudentContact[]>([]);
+  const [contactPhones, setContactPhones] = useState<{ [id: string]: string | null }>({});
+  const [contactSearchQuery, setContactSearchQuery] = useState('');
   const [contents, setContents] = useState<SupportContent[]>([]);
   const [settings, setSettings] = useState<Record<string, any>>({});
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
-  const [unmaskedContacts, setUnmaskedContacts] = useState<{ [id: string]: boolean }>({});
 
   // Role management filters & modal
   const [searchQuery, setSearchQuery] = useState('');
@@ -442,21 +443,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
 
   const handleToggleViewContact = async (studentId: string, studentCode: string) => {
     try {
-      const isCurrentlyViewed = Boolean(unmaskedContacts[studentId]);
-      if (!isCurrentlyViewed) {
-        await logSingleContactView(studentCode, adminId);
+      const isCurrentlyViewed = Object.prototype.hasOwnProperty.call(contactPhones, studentId);
+      if (isCurrentlyViewed) {
+        setContactPhones((current) => {
+          const next = { ...current };
+          delete next[studentId];
+          return next;
+        });
+      } else {
+        const phone = await getContactPhoneWithAudit(studentId, studentCode, adminId);
+        setContactPhones((current) => ({ ...current, [studentId]: phone }));
         onAddToast('Đã ghi Audit Log', `Xem thông tin liên hệ của ${studentCode} đã được lưu audit.`, 'info');
         const aData = await getAuditLogs();
         setAuditLogs(aData);
       }
-      setUnmaskedContacts({
-        ...unmaskedContacts,
-        [studentId]: !isCurrentlyViewed
-      });
     } catch (err: any) {
       onAddToast('Không thể mở liên hệ', err.message, 'warning');
     }
   };
+
+  const normalizedContactSearch = contactSearchQuery.trim().toLocaleLowerCase('vi');
+  const filteredContacts = contacts.filter((contact) =>
+    !normalizedContactSearch || [contact.studentCode, contact.fullName, contact.className]
+      .some((value) => (value || '').toLocaleLowerCase('vi').includes(normalizedContactSearch))
+  );
 
   const handleToggleKillSwitch = async () => {
     const nextState = !settings.support_enabled;
@@ -1466,8 +1476,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
               </span>
             </div>
 
+            <label className="relative block max-w-lg">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                type="search"
+                value={contactSearchQuery}
+                onChange={(event) => setContactSearchQuery(event.target.value)}
+                placeholder="Tìm theo mã học sinh, họ tên hoặc lớp"
+                aria-label="Tìm danh bạ theo mã học sinh, họ tên hoặc lớp"
+                className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-3 text-xs text-slate-700 outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-500/20"
+              />
+            </label>
+
             {contacts.length === 0 ? (
               <p className="text-xs text-slate-400 py-6 text-center">Chưa có học sinh nào trong danh bạ liên hệ.</p>
+            ) : filteredContacts.length === 0 ? (
+              <p className="text-xs text-slate-400 py-6 text-center">Không tìm thấy liên hệ phù hợp.</p>
             ) : (
               <>
               <div className="hidden xl:block">
@@ -1482,14 +1506,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {contacts.map((c) => {
-                      const isViewed = Boolean(unmaskedContacts[c.studentId]);
+                    {filteredContacts.map((c) => {
+                      const isViewed = Object.prototype.hasOwnProperty.call(contactPhones, c.studentId);
                       return (
                         <tr key={c.studentId}>
                           <td className="p-3 font-bold font-mono text-blue-700">{c.studentCode}</td>
                           <td className="p-3 font-medium">{isViewed ? c.fullName : '••••••••••••'}</td>
                           <td className="p-3">{c.className}</td>
-                          <td className="p-3 font-mono">{isViewed ? c.phone : '0905 ••• •••'}</td>
+                          <td className="p-3 font-mono">{isViewed ? (contactPhones[c.studentId] || 'Chưa cập nhật') : '••• ••• •••'}</td>
                           <td className="p-3 text-right">
                             <button
                               onClick={() => handleToggleViewContact(c.studentId, c.studentCode)}
@@ -1505,8 +1529,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
                 </table>
               </div>
               <div className="space-y-3 xl:hidden">
-                {contacts.map((c) => {
-                  const isViewed = Boolean(unmaskedContacts[c.studentId]);
+                {filteredContacts.map((c) => {
+                  const isViewed = Object.prototype.hasOwnProperty.call(contactPhones, c.studentId);
                   return (
                     <article key={c.studentId} className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-xs">
                       <div className="flex items-start justify-between gap-3">
@@ -1527,7 +1551,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
                         </div>
                         <div className="col-span-2">
                           <dt className="text-[10px] font-semibold uppercase text-slate-500">Số điện thoại</dt>
-                          <dd className="mt-1 font-mono text-slate-800">{isViewed ? c.phone : '0905 ••• •••'}</dd>
+                          <dd className="mt-1 font-mono text-slate-800">{isViewed ? (contactPhones[c.studentId] || 'Chưa cập nhật') : '••• ••• •••'}</dd>
                         </div>
                       </dl>
                       <button

@@ -1693,22 +1693,22 @@ export async function getContactsWithAudit(adminId?: string): Promise<StudentCon
 
   const { data, error } = await supabase
     .from('contacts')
-    .select('*, profiles(student_code)');
+    .select('student_id, full_name, class_name, profiles(student_code)');
 
   throwIfError(error, 'Không tải được danh bạ liên hệ.');
   if (!data) return [];
   return data.map((c) => ({
     studentId: c.student_id,
-    studentCode: c.profiles?.student_code || 'Chưa có mã',
+    studentCode: c.profiles?.[0]?.student_code || 'Chưa có mã',
     fullName: c.full_name,
     className: c.class_name,
-    phone: c.phone,
-    email: c.email,
-    guardianContact: c.guardian_contact
+    phone: '',
+    email: '',
+    guardianContact: ''
   }));
 }
 
-export async function logSingleContactView(studentCode: string, adminId?: string) {
+export async function getContactPhoneWithAudit(studentId: string, studentCode: string, adminId?: string): Promise<string | null> {
   const res = await supabase.from('audit_log').insert({
     actor_id: adminId,
     actor_role: 'admin',
@@ -1717,7 +1717,15 @@ export async function logSingleContactView(studentCode: string, adminId?: string
     meta: { reason: 'Xem thông tin chi tiết liên hệ học sinh' }
   });
   throwIfError(res.error, 'Không ghi được audit log xem liên hệ.');
-  return res;
+
+  const { data, error } = await supabase
+    .from('contacts')
+    .select('phone')
+    .eq('student_id', studentId)
+    .maybeSingle();
+
+  throwIfError(error, 'Không tải được số điện thoại liên hệ.');
+  return data?.phone || null;
 }
 
 export async function getSupportContentLibrary(): Promise<SupportContent[]> {
