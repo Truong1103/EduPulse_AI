@@ -23,12 +23,18 @@ import {
   ChevronDown,
   Eye
 } from 'lucide-react';
-import { SupportRequest, SupportContent } from '../../types';
+import { SupportRequest, SupportContent, RestPeriod, SupportInvite, Goal, PlanVersion, PlanTask, MentorStudentJournalEntry } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
 import { RoleWorkspace } from '../common/RoleWorkspace';
 import {
   getMentorAssignedStudents,
   getMentorStudentSummaries,
+  getMentorStudentJournal,
+  getRestPeriods,
+  getSupportInvites,
+  getStudentGoals,
+  getPlanVersions,
+  getPlanTasks,
   getMentorSupportRequests,
   updateSupportRequest,
   fetchSupportContentTemplates,
@@ -46,7 +52,7 @@ import {
   approveBuddyLink
 } from '../../services/api';
 import { DualPlanBars, EmptyHint } from '../common/StudyChrome';
-import { REQUEST_PIPELINE, mondayOf, weekStatusLabel } from '../../data/studyCatalog';
+import { REQUEST_PIPELINE, WEEKDAYS, mondayOf, weekStatusLabel } from '../../data/studyCatalog';
 import { DetailSheet } from '../common/DetailSheet';
 import { DualLineChart } from '../common/StudyCharts';
 import { MentorStatisticsPanel } from './MentorStatisticsPanel';
@@ -77,6 +83,14 @@ export const MentorDashboard: React.FC<MentorDashboardProps> = ({ isLeadMentor, 
   // Mentor confirm status modal states
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [studentDetail, setStudentDetail] = useState<any | null>(null);
+  const [studentDetailGoals, setStudentDetailGoals] = useState<Goal[]>([]);
+  const [studentDetailPlanVersions, setStudentDetailPlanVersions] = useState<Record<string, PlanVersion[]>>({});
+  const [studentDetailPlanTasks, setStudentDetailPlanTasks] = useState<Record<string, PlanTask[]>>({});
+  const [studentDetailJournal, setStudentDetailJournal] = useState<MentorStudentJournalEntry[]>([]);
+  const [studentDetailRestPeriods, setStudentDetailRestPeriods] = useState<RestPeriod[]>([]);
+  const [studentDetailInvites, setStudentDetailInvites] = useState<SupportInvite[]>([]);
+  const [studentDetailLoading, setStudentDetailLoading] = useState(false);
+  const [studentDetailError, setStudentDetailError] = useState<string | null>(null);
   const [selectedStudentForStatus, setSelectedStudentForStatus] = useState<any | null>(null);
   const [mentorStatusWeek, setMentorStatusWeek] = useState(mondayOf(new Date().toISOString().split('T')[0]));
   const [mentorStatusChoice, setMentorStatusChoice] = useState<'training' | 'resting' | 'achieved' | 'stopped'>('training');
@@ -118,8 +132,9 @@ export const MentorDashboard: React.FC<MentorDashboardProps> = ({ isLeadMentor, 
       setSummaries(sumData);
       setSupportRequests(srData);
       setBuddyPairs(buddyData);
-      setTemplates(tmplData);
-      if (tmplData.length > 0) setSelectedTemplate(tmplData[0].id);
+      const approvedTemplates = tmplData.filter((template) => template.status === 'approved');
+      setTemplates(approvedTemplates);
+      setSelectedTemplate(approvedTemplates[0]?.id || '');
       if (stData.length > 0) setTargetStudentCode(stData[0].student_code);
 
       if (isLeadMentor) {
@@ -151,6 +166,61 @@ export const MentorDashboard: React.FC<MentorDashboardProps> = ({ isLeadMentor, 
   useEffect(() => {
     loadData();
   }, [mentorId, isLeadMentor]);
+
+  useEffect(() => {
+    const studentId = studentDetail?.student_id;
+    if (!studentId) {
+      setStudentDetailGoals([]);
+      setStudentDetailPlanVersions({});
+      setStudentDetailPlanTasks({});
+      setStudentDetailJournal([]);
+      setStudentDetailRestPeriods([]);
+      setStudentDetailInvites([]);
+      setStudentDetailError(null);
+      setStudentDetailLoading(false);
+      return;
+    }
+
+    let isCurrent = true;
+    setStudentDetailGoals([]);
+    setStudentDetailPlanVersions({});
+    setStudentDetailPlanTasks({});
+    setStudentDetailJournal([]);
+    setStudentDetailRestPeriods([]);
+    setStudentDetailInvites([]);
+    setStudentDetailLoading(true);
+    setStudentDetailError(null);
+    Promise.all([
+      getStudentGoals(studentId),
+      getMentorStudentJournal(studentId),
+      getRestPeriods(studentId),
+      getSupportInvites(studentId)
+    ])
+      .then(async ([goals, journal, restPeriods, invites]) => {
+        const [versions, tasks] = await Promise.all([
+          Promise.all(goals.map(async (goal) => [goal.id, await getPlanVersions(goal.id)] as const)),
+          Promise.all(goals.map(async (goal) => [goal.id, await getPlanTasks(goal.id)] as const))
+        ]);
+        if (!isCurrent) return;
+        setStudentDetailGoals(goals);
+        setStudentDetailPlanVersions(Object.fromEntries(versions));
+        setStudentDetailPlanTasks(Object.fromEntries(tasks));
+        setStudentDetailJournal(journal);
+        setStudentDetailRestPeriods(restPeriods);
+        setStudentDetailInvites(invites);
+      })
+      .catch((error) => {
+        if (!isCurrent) return;
+        setStudentDetailError(error instanceof Error ? error.message : 'Không tải được dữ liệu học sinh.');
+      })
+      .finally(() => {
+        if (isCurrent) setStudentDetailLoading(false);
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [studentDetail?.student_id]);
 
   const handleResolveRequest = async (reqId: string, status: 'in_progress' | 'done') => {
     const note = replyText[reqId] || (status === 'done' ? 'Đã hướng dẫn và hỗ trợ học sinh giải quyết khúc mắc.' : 'Đã tiếp nhận, đang trao đổi.');
@@ -852,13 +922,48 @@ export const MentorDashboard: React.FC<MentorDashboardProps> = ({ isLeadMentor, 
         <DetailSheet
           open={Boolean(studentDetail)}
           title={`Học sinh ${studentDetail?.student_code || ''}`}
-          subtitle="Chỉ tiến độ tuần và yêu cầu chủ động. Không hiện điểm nguy cơ hay xếp hạng."
+          subtitle="Kế hoạch, nhật ký, tiến độ, báo nghỉ và hỗ trợ. Chỉ dữ liệu học sinh được phân công còn consent; ghi chú riêng và thông tin liên hệ không hiển thị."
           onClose={() => setStudentDetail(null)}
         >
           {studentDetail && (
             <>
+              {studentDetailLoading && <p role="status" className="text-xs text-slate-500">Đang tải dữ liệu học sinh…</p>}
+              {studentDetailError && <p role="alert" className="text-xs text-rose-700">{studentDetailError}</p>}
               <p className="text-xs text-slate-600">Nhóm hoạt động: <strong>{studentDetail.activity_group || '—'}</strong></p>
               <p className="text-xs text-slate-600">Phụ huynh: {studentDetail.guardian_confirmed ? 'Đã xác nhận' : 'Chưa'}</p>
+              <h4 className="text-xs font-bold uppercase text-slate-500 pt-2">Mục tiêu và kế hoạch</h4>
+              {studentDetailGoals.length === 0 ? (
+                <p className="text-xs text-slate-400">Chưa có mục tiêu đang lưu.</p>
+              ) : (
+                studentDetailGoals.map((goal) => {
+                  const versions = studentDetailPlanVersions[goal.id] || [];
+                  const currentVersion = versions[versions.length - 1];
+                  return (
+                    <div key={goal.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs space-y-1.5">
+                      <p className="font-bold text-slate-800">{goal.planTitle}</p>
+                      <p className="text-slate-600">{goal.activityGroup} · đến {goal.targetDate || 'chưa đặt ngày đích'}</p>
+                      {goal.successCriteria && <p className="text-slate-600">Tiêu chí: {goal.successCriteria}</p>}
+                      {currentVersion ? (
+                        <>
+                          <p className="font-semibold text-slate-700">Kế hoạch hiện tại: {currentVersion.sessionsPerWeek} buổi/tuần · hiệu lực {currentVersion.effectiveFrom}</p>
+                          {currentVersion.schedule.length > 0 ? currentVersion.schedule.map((session, index) => (
+                            <p key={`${goal.id}-${index}`} className="text-slate-600">{WEEKDAYS.find((day) => day.id === session.dayOfWeek)?.short || 'Ngày chưa chọn'} · {session.time} · {session.task}</p>
+                          )) : <p className="text-slate-500">Chưa chọn ngày và giờ cụ thể.</p>}
+                        </>
+                      ) : <p className="text-slate-500">Chưa tạo phiên bản lịch luyện tập.</p>}
+                      {versions.length > 1 && <p className="text-slate-500">Có {versions.length} phiên bản kế hoạch đã lưu.</p>}
+                      <div className="border-t border-slate-200 pt-2">
+                        <p className="font-semibold text-slate-700">Việc cần làm ({(studentDetailPlanTasks[goal.id] || []).length})</p>
+                        {(studentDetailPlanTasks[goal.id] || []).length === 0 ? (
+                          <p className="text-slate-500">Chưa có việc được giao.</p>
+                        ) : (studentDetailPlanTasks[goal.id] || []).map((task) => (
+                          <p key={task.id} className="text-slate-600">{task.completed ? '✓' : '○'} {task.title}{task.dueDate ? ` · hạn ${task.dueDate}` : ''}</p>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
               <DualLineChart
                 title="% hoàn thành các tuần"
                 caption="Cùng nguồn weekly_summary với học sinh. Đơn vị %."
@@ -885,6 +990,49 @@ export const MentorDashboard: React.FC<MentorDashboardProps> = ({ isLeadMentor, 
                   plannedCurrent={s.planned_current}
                 />
               ))}
+              <h4 className="text-xs font-bold uppercase text-slate-500 pt-2">Nhật ký luyện tập</h4>
+              {studentDetailJournal.length === 0 ? (
+                <p className="text-xs text-slate-400">Chưa có nhật ký buổi luyện tập.</p>
+              ) : (
+                studentDetailJournal.map((entry) => (
+                  <div key={`${entry.sessionDate}-${entry.goalTitle}`} className="rounded-xl border border-slate-200 p-3 text-xs space-y-1">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <p className="font-semibold text-slate-800">{new Date(`${entry.sessionDate}T12:00:00`).toLocaleDateString('vi-VN')} · {entry.goalTitle}</p>
+                      <span className="text-slate-600">{entry.status === 'done' ? 'Hoàn thành' : entry.status === 'partial' ? 'Một phần' : 'Bỏ lỡ'}</span>
+                    </div>
+                    <p className="text-slate-600">{entry.durationMin == null ? 'Không ghi thời lượng' : `${entry.durationMin} phút`} · động lực {entry.motivation ?? '—'}/5 · độ khó {entry.difficulty ?? '—'}/5 · ý định tiếp tục {entry.intentContinue ?? '—'}/5</p>
+                    {entry.barrier && <p className="text-slate-600">Rào cản: {entry.barrier}</p>}
+                    {entry.skippedFields.length > 0 && <p className="text-slate-500">Bỏ qua câu hỏi: {entry.skippedFields.join(', ')}</p>}
+                  </div>
+                ))
+              )}
+              <h4 className="text-xs font-bold uppercase text-slate-500 pt-2">Các đợt tạm nghỉ</h4>
+              {studentDetailRestPeriods.length === 0 ? (
+                <p className="text-xs text-slate-400">Chưa có đợt tạm nghỉ.</p>
+              ) : (
+                studentDetailRestPeriods.map((period) => (
+                  <div key={period.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs space-y-1">
+                    <p className="font-semibold text-slate-800">{period.dateFrom} đến {period.dateTo}</p>
+                    <p className="text-slate-600">Lý do: {period.reason === 'sick' ? 'Ốm đau' : period.reason === 'exam' ? 'Thi cử' : 'Khác'}</p>
+                    {period.note && <p className="text-slate-600">Ghi chú: {period.note}</p>}
+                  </div>
+                ))
+              )}
+              <h4 className="text-xs font-bold uppercase text-slate-500 pt-2">Lịch sử phản hồi tiến bộ</h4>
+              {studentDetailInvites.length === 0 ? (
+                <p className="text-xs text-slate-400">Chưa có phản hồi hỗ trợ.</p>
+              ) : (
+                studentDetailInvites.map((invite) => (
+                  <div key={invite.id} className="rounded-xl border border-slate-200 p-3 text-xs space-y-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="font-semibold text-slate-800">{invite.contentTitle}</p>
+                      <span className="shrink-0 text-slate-500">{invite.status === 'sent' ? 'Chờ phản hồi' : invite.status === 'accepted' ? 'Đã áp dụng' : invite.status === 'snoozed' ? 'Đang hoãn' : 'Đã từ chối'}</span>
+                    </div>
+                    <p className="whitespace-pre-wrap text-slate-600">{invite.contentBody}</p>
+                    <p className="text-[10px] text-slate-400">Gửi {new Date(invite.sentAt).toLocaleString('vi-VN')}{invite.respondedAt ? ` · Phản hồi ${new Date(invite.respondedAt).toLocaleString('vi-VN')}` : ''}</p>
+                  </div>
+                ))
+              )}
               <h4 className="text-xs font-bold uppercase text-slate-500 pt-2">Yêu cầu học sinh gửi</h4>
               {supportRequests.filter((r) => r.studentCode === studentDetail.student_code).length === 0 ? (
                 <p className="text-xs text-slate-400">Chưa có yêu cầu.</p>
@@ -896,6 +1044,19 @@ export const MentorDashboard: React.FC<MentorDashboardProps> = ({ isLeadMentor, 
                       <span className="font-bold">{r.status}</span>
                       <p>"{r.note}"</p>
                       {r.responseNote && <p className="text-emerald-800 mt-1">{r.responseNote}</p>}
+                    </div>
+                  ))
+              )}
+              <h4 className="text-xs font-bold uppercase text-slate-500 pt-2">Bạn đồng hành</h4>
+              {buddyPairs.filter((pair) => pair.codeA === studentDetail.student_code || pair.codeB === studentDetail.student_code).length === 0 ? (
+                <p className="text-xs text-slate-400">Chưa có kết nối bạn đồng hành.</p>
+              ) : (
+                buddyPairs
+                  .filter((pair) => pair.codeA === studentDetail.student_code || pair.codeB === studentDetail.student_code)
+                  .map((pair) => (
+                    <div key={pair.id} className="rounded-xl border border-slate-200 p-3 text-xs flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-mono font-semibold text-slate-700">{pair.codeA} ↔ {pair.codeB}</span>
+                      <span className="text-slate-600">{pair.status === 'accepted' ? 'Đã chấp nhận' : pair.status === 'pending' ? 'Đang chờ' : pair.status === 'rejected' ? 'Đã từ chối' : 'Đã hủy'}{pair.mentorApproved ? ' · Mentor đã ghi nhận' : ''}</span>
                     </div>
                   ))
               )}

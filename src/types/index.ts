@@ -121,6 +121,19 @@ export interface MentorStudentLevelStatistics {
   intent: MentorStudentLevelScale;
 }
 
+export interface MentorStudentJournalEntry {
+  sessionDate: string;
+  goalTitle: string;
+  activityGroup: string;
+  status: 'done' | 'partial' | 'missed';
+  durationMin: number | null;
+  motivation: number | null;
+  difficulty: number | null;
+  barrier: string | null;
+  intentContinue: number | null;
+  skippedFields: string[];
+}
+
 // Invited User
 export interface InvitedUser {
   id: string;
@@ -155,6 +168,14 @@ export interface ConsentRecord {
   guardianConfirmed: boolean;
   withdrawnAt?: string;
   withdrawReason?: string;
+}
+
+export interface StudentDataRequest {
+  id: string;
+  type: 'export' | 'deletion';
+  status: 'pending' | 'processing' | 'completed' | 'rejected';
+  requestedAt: string;
+  completedAt?: string;
 }
 
 // Goal
@@ -431,6 +452,17 @@ export interface ResearchSupportAndPredictionSummary {
     evaluationStatus: string;
     probabilityBands: CountDistribution[];
   };
+}
+
+export interface ResearchSurveySummary {
+  surveyType: string;
+  responseCount: number | null;
+  helpfulN: number | null;
+  helpfulMean: number | null;
+  easeN: number | null;
+  easeMean: number | null;
+  annoyanceN: number | null;
+  annoyanceMean: number | null;
 }
 
 // Audit Log

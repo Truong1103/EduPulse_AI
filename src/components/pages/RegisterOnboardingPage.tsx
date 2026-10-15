@@ -22,6 +22,7 @@ interface RegisterOnboardingPageProps {
     title: string;
     category: GoalCategory;
     targetDaysPerWeek: number;
+    durationMins: number;
   }) => void;
 }
 
@@ -83,7 +84,8 @@ export const RegisterOnboardingPage: React.FC<RegisterOnboardingPageProps> = ({
     onCompleteOnboarding({
       title: goalTitle,
       category: selectedCategory,
-      targetDaysPerWeek: daysPerWeek
+      targetDaysPerWeek: daysPerWeek,
+      durationMins
     });
   };
 

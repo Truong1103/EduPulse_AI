@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AppRoute, AppRole } from './types';
+import { AppRoute, AppRole, GoalCategory } from './types';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { POST_AUTH_REDIRECT_KEY } from './lib/supabase';
 
@@ -28,12 +28,37 @@ import { HowItWorksPage } from './components/pages/HowItWorksPage';
 import { AboutPage } from './components/pages/AboutPage';
 import { LoginPage } from './components/pages/LoginPage';
 import { RegisterOnboardingPage } from './components/pages/RegisterOnboardingPage';
+import { createPlanVersion, createStudentGoal } from './services/api';
 
 // 4 Role Dashboards
 import { StudentDashboard } from './components/pages/StudentDashboard';
 import { MentorDashboard } from './components/pages/MentorDashboard';
 import { ResearcherDashboard } from './components/pages/ResearcherDashboard';
 import { AdminDashboard } from './components/pages/AdminDashboard';
+
+const PENDING_ONBOARDING_KEY = 'edupulse_pending_onboarding';
+
+type OnboardingGoal = {
+  title: string;
+  category: GoalCategory;
+  targetDaysPerWeek: number;
+  durationMins: number;
+};
+
+function getOnboardingValidationError(newGoal: OnboardingGoal): string | null {
+  if (!newGoal || typeof newGoal !== 'object') return 'Bản đăng ký mục tiêu không hợp lệ.';
+  if (typeof newGoal.title !== 'string' || !newGoal.title.trim()) return 'Hãy nhập tên mục tiêu trước khi hoàn tất.';
+  if (!['academic', 'language', 'sports', 'arts', 'skills'].includes(String(newGoal.category))) {
+    return 'Lĩnh vực mục tiêu không hợp lệ.';
+  }
+  if (!Number.isInteger(newGoal.targetDaysPerWeek) || newGoal.targetDaysPerWeek < 1 || newGoal.targetDaysPerWeek > 5) {
+    return 'Tần suất luyện tập phải từ 1 đến 5 buổi mỗi tuần.';
+  }
+  if (![20, 30, 45, 60].includes(newGoal.durationMins)) {
+    return 'Thời lượng mỗi buổi không hợp lệ.';
+  }
+  return null;
+}
 
 const VALID_ROUTES: AppRoute[] = [
   'landing',
@@ -58,10 +83,53 @@ function routeFromLocationHash(): AppRoute | null {
   return VALID_ROUTES.includes(first) ? first : null;
 }
 
+async function saveOnboardingGoal(studentId: string, newGoal: OnboardingGoal) {
+  const categoryLabels: Record<GoalCategory, string> = {
+    academic: 'Học tập / Học thuật',
+    language: 'Ngoại ngữ',
+    sports: 'Thể thao & Thể chất',
+    arts: 'Nghệ thuật & Sáng tạo',
+    skills: 'Kỹ năng cá nhân'
+  };
+  const validationError = getOnboardingValidationError(newGoal);
+  if (validationError) throw new Error(validationError);
+  const title = newGoal.title.trim();
+
+  const { data, error } = await createStudentGoal(studentId, {
+    planTitle: title,
+    successCriteria: title,
+    description: `Thời lượng dự kiến: ${newGoal.durationMins} phút mỗi buổi.`,
+    activityGroup: categoryLabels[newGoal.category],
+    startDate: new Date().toISOString().slice(0, 10),
+    priority: 'medium',
+    planningStatus: 'in_progress',
+    minTask: 'Hoàn thành một buổi luyện tập theo mục tiêu đã chọn'
+  });
+  if (error) throw error;
+  if (!data?.id) throw new Error('Không nhận được mã mục tiêu mới.');
+
+  try {
+    await createPlanVersion({
+      goalId: data.id,
+      studentId,
+      effectiveFrom: new Date().toISOString().slice(0, 10),
+      sessionsPerWeek: newGoal.targetDaysPerWeek,
+      schedule: [],
+      reason: 'Nhịp luyện tập khởi đầu từ đăng ký'
+    });
+    return { planError: null as Error | null };
+  } catch (planError) {
+    return {
+      planError: planError instanceof Error ? planError : new Error('Không lưu được tần suất luyện tập.')
+    };
+  }
+}
+
 function AppContent() {
   const { currentUser, isLeadMentor, isLoading } = useAuth();
   const [currentRoute, setCurrentRoute] = useState<AppRoute>(() => routeFromLocationHash() || 'landing');
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const onboardingSaveInProgress = useRef(false);
 
   useEffect(() => {
     const handleHashChange = () => {
@@ -104,6 +172,53 @@ function AppContent() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
+  useEffect(() => {
+    if (isLoading || !currentUser || onboardingSaveInProgress.current) return;
+    const pending = sessionStorage.getItem(PENDING_ONBOARDING_KEY);
+    if (!pending) return;
+
+    if (currentUser.role !== 'student') {
+      addToast('Chưa lưu mục tiêu', 'Bản đăng ký chỉ được lưu vào tài khoản học sinh.', 'warning');
+      return;
+    }
+
+    let newGoal: OnboardingGoal;
+    try {
+      newGoal = JSON.parse(pending) as OnboardingGoal;
+    } catch {
+      sessionStorage.removeItem(PENDING_ONBOARDING_KEY);
+      addToast('Không đọc được mục tiêu', 'Vui lòng bắt đầu lại bước thiết lập mục tiêu.', 'warning');
+      return;
+    }
+    const validationError = getOnboardingValidationError(newGoal);
+    if (validationError) {
+      sessionStorage.removeItem(PENDING_ONBOARDING_KEY);
+      addToast('Thông tin mục tiêu không hợp lệ', validationError, 'warning');
+      return;
+    }
+
+    onboardingSaveInProgress.current = true;
+    saveOnboardingGoal(currentUser.id, newGoal)
+      .then(({ planError }) => {
+        sessionStorage.removeItem(PENDING_ONBOARDING_KEY);
+        if (planError) {
+          addToast('Mục tiêu đã lưu, nhịp luyện tập chưa lưu', planError.message, 'warning');
+        } else {
+          addToast('Đã lưu mục tiêu!', 'Mục tiêu và tần suất luyện tập đã được ghi vào hồ sơ của bạn.', 'success');
+        }
+      })
+      .catch((error) => {
+        addToast(
+          'Chưa lưu được mục tiêu',
+          error instanceof Error ? error.message : 'Vui lòng thử lại sau khi kiểm tra kết nối.',
+          'warning'
+        );
+      })
+      .finally(() => {
+        onboardingSaveInProgress.current = false;
+      });
+  }, [currentUser, isLoading]);
+
   const navigateTo = (route: AppRoute) => {
     setCurrentRoute(route);
     window.location.hash = route === 'landing' ? '' : route;
@@ -118,13 +233,50 @@ function AppContent() {
     );
   };
 
-  const handleRegisterSubmit = () => {
-    addToast(
-      'Đã đăng ký mục tiêu!',
-      'Hồ sơ của bạn đã sẵn sàng. Chuyển vào không gian rèn luyện cá nhân.',
-      'success'
-    );
-    navigateTo('student');
+  const handleRegisterSubmit = async (newGoal?: {
+    title: string;
+    category: GoalCategory;
+    targetDaysPerWeek: number;
+    durationMins: number;
+  }) => {
+    if (!newGoal) return;
+    const validationError = getOnboardingValidationError(newGoal);
+    if (validationError) {
+      addToast('Thông tin mục tiêu không hợp lệ', validationError, 'warning');
+      return;
+    }
+    if (!currentUser) {
+      sessionStorage.setItem(PENDING_ONBOARDING_KEY, JSON.stringify(newGoal));
+      addToast('Cần đăng nhập học sinh', 'Lựa chọn của bạn được giữ trong phiên này; đăng nhập để lưu vào hồ sơ.', 'info');
+      navigateTo('login');
+      return;
+    }
+    if (currentUser.role !== 'student') {
+      addToast('Chỉ tài khoản học sinh mới lưu được mục tiêu đăng ký.', 'Đăng nhập bằng tài khoản học sinh để tiếp tục.', 'warning');
+      return;
+    }
+
+    try {
+      const { planError } = await saveOnboardingGoal(currentUser.id, newGoal);
+      if (planError) {
+        addToast(
+          'Mục tiêu đã lưu, nhịp luyện tập chưa lưu',
+          planError instanceof Error ? planError.message : 'Hãy cấu hình lại kế hoạch trong bàn làm việc học sinh.',
+          'warning'
+        );
+        navigateTo('student');
+        return;
+      }
+
+      addToast('Đã lưu mục tiêu!', 'Mục tiêu và tần suất luyện tập đã được ghi vào hồ sơ của bạn.', 'success');
+      navigateTo('student');
+    } catch (error) {
+      addToast(
+        'Chưa lưu được mục tiêu',
+        error instanceof Error ? error.message : 'Vui lòng thử lại sau khi kiểm tra kết nối.',
+        'warning'
+      );
+    }
   };
 
   const scrollToSection = (id: string) => {

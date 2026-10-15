@@ -1570,18 +1570,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onAddToast }) =>
                   <span>{r.profiles?.student_code || r.student_id}</span>
                   <span>{r.type} · {r.status}</span>
                   {r.status === 'pending' && (
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        await resolveDataRequest(r.id, 'completed', adminId);
-                        const d = await getDataRequests();
-                        setDataRequests(d);
-                        onAddToast('Đã xử lý yêu cầu', 'Trạng thái cập nhật trên CSDL.', 'success');
-                      }}
-                      className="px-3 py-1 rounded-lg bg-sky-100 hover:bg-sky-200 text-sky-800 font-bold cursor-pointer"
-                    >
-                      Đánh dấu xong
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await resolveDataRequest(r.id, 'completed', adminId);
+                            setDataRequests(await getDataRequests());
+                            onAddToast('Đã xử lý yêu cầu', 'Trạng thái cập nhật trên CSDL.', 'success');
+                          } catch (error) {
+                            onAddToast('Chưa cập nhật được yêu cầu', error instanceof Error ? error.message : 'Vui lòng thử lại.', 'warning');
+                          }
+                        }}
+                        className="px-3 py-1 rounded-lg bg-sky-100 hover:bg-sky-200 text-sky-800 font-bold cursor-pointer"
+                      >
+                        Đánh dấu xong
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!window.confirm('Từ chối yêu cầu dữ liệu này?')) return;
+                          try {
+                            await resolveDataRequest(r.id, 'rejected', adminId);
+                            setDataRequests(await getDataRequests());
+                            onAddToast('Đã từ chối yêu cầu', 'Student sẽ thấy trạng thái từ chối trong hồ sơ dữ liệu.', 'info');
+                          } catch (error) {
+                            onAddToast('Chưa cập nhật được yêu cầu', error instanceof Error ? error.message : 'Vui lòng thử lại.', 'warning');
+                          }
+                        }}
+                        className="px-3 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold cursor-pointer"
+                      >
+                        Từ chối
+                      </button>
+                    </div>
                   )}
                 </div>
               ))}

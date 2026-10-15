@@ -10,6 +10,8 @@ declare
   mentor_status_definition text;
   weekly_pipeline_definition text;
   weekly_prediction_definition text;
+  research_survey_definition text;
+  mentor_journal_definition text;
   outcomes_view_definition text;
 begin
   if not has_table_privilege('authenticated', 'public.plan_tasks', 'select') then
@@ -29,6 +31,75 @@ begin
         and p.tablename = 'plan_tasks'
         and p.policyname in ('plan_tasks_select_own', 'plan_tasks_insert_own', 'plan_tasks_update_own', 'plan_tasks_delete_own')) <> 4 then
     raise exception 'Plan task owner policies are incomplete.';
+  end if;
+  if not exists (
+    select 1 from pg_policies p
+    where p.schemaname = 'public'
+      and p.tablename = 'plan_tasks'
+      and p.policyname = 'plan_tasks_select_own'
+      and p.cmd = 'SELECT'
+      and position('is_assigned_mentor' in lower(coalesce(p.qual, ''))) > 0
+      and position('withdrawn_at' in lower(coalesce(p.qual, ''))) > 0
+  ) then
+    raise exception 'Mentors must only read tasks for assigned students with active consent.';
+  end if;
+
+  if not exists (
+    select 1 from pg_policies p
+    where p.schemaname = 'public'
+      and p.tablename = 'goals'
+      and p.policyname = 'goals_select'
+      and p.cmd = 'SELECT'
+      and position('is_assigned_mentor' in lower(coalesce(p.qual, ''))) > 0
+      and position('withdrawn_at' in lower(coalesce(p.qual, ''))) > 0
+  ) then
+    raise exception 'Mentors must only read goals for assigned students with active consent.';
+  end if;
+  if not exists (
+    select 1 from pg_policies p
+    where p.schemaname = 'public'
+      and p.tablename = 'plan_versions'
+      and p.policyname = 'plan_versions_select'
+      and p.cmd = 'SELECT'
+      and position('is_assigned_mentor' in lower(coalesce(p.qual, ''))) > 0
+      and position('withdrawn_at' in lower(coalesce(p.qual, ''))) > 0
+  ) then
+    raise exception 'Mentors must only read plans for assigned students with active consent.';
+  end if;
+
+  if not exists (
+    select 1 from pg_policies p
+    where p.schemaname = 'public'
+      and p.tablename = 'rest_periods'
+      and p.policyname = 'rest_periods_select'
+      and p.cmd = 'SELECT'
+      and position('is_assigned_mentor' in lower(coalesce(p.qual, ''))) > 0
+      and position('withdrawn_at' in lower(coalesce(p.qual, ''))) > 0
+  ) then
+    raise exception 'Mentors must only read rest periods for assigned students with active consent.';
+  end if;
+  if not exists (
+    select 1 from pg_policies p
+    where p.schemaname = 'public'
+      and p.tablename = 'support_invites'
+      and p.policyname = 'support_invites_select'
+      and p.cmd = 'SELECT'
+      and position('is_assigned_mentor' in lower(coalesce(p.qual, ''))) > 0
+      and position('withdrawn_at' in lower(coalesce(p.qual, ''))) > 0
+  ) then
+    raise exception 'Mentor encouragement history must require assignment and active consent.';
+  end if;
+  if not exists (
+    select 1 from pg_policies p
+    where p.schemaname = 'public'
+      and p.tablename = 'support_invites'
+      and p.policyname = 'support_invites_mentor_insert'
+      and p.cmd = 'INSERT'
+      and position('is_assigned_mentor' in lower(coalesce(p.with_check, ''))) > 0
+      and position('withdrawn_at' in lower(coalesce(p.with_check, ''))) > 0
+      and position('approved' in lower(coalesce(p.with_check, ''))) > 0
+  ) then
+    raise exception 'Mentors must only send approved support content to assigned students with active consent.';
   end if;
 
   if has_table_privilege('authenticated', 'public.study_outcome_events', 'select') then
@@ -76,6 +147,35 @@ begin
   end if;
   if has_function_privilege('anon', 'public.get_research_support_and_prediction_summary()', 'execute') then
     raise exception 'Anonymous users must not call Researcher support statistics.';
+  end if;
+  if not has_function_privilege('authenticated', 'public.get_research_survey_summary()', 'execute') then
+    raise exception 'Authenticated Researchers must be able to call the guarded survey summary.';
+  end if;
+  if has_function_privilege('anon', 'public.get_research_survey_summary()', 'execute') then
+    raise exception 'Anonymous users must not call the survey summary.';
+  end if;
+  if not has_function_privilege('authenticated', 'public.get_mentor_student_journal(uuid)', 'execute') then
+    raise exception 'Mentors must be able to call the guarded student journal RPC.';
+  end if;
+  if has_function_privilege('anon', 'public.get_mentor_student_journal(uuid)', 'execute') then
+    raise exception 'Anonymous users must not call Mentor journal access.';
+  end if;
+  select pg_get_functiondef('public.get_mentor_student_journal(uuid)'::regprocedure)
+    into mentor_journal_definition;
+  if position('jwt_role() <> ''mentor''' in lower(mentor_journal_definition)) = 0
+     or position('is_assigned_mentor(p_student_id)' in lower(mentor_journal_definition)) = 0
+     or position('withdrawn_at is null' in lower(mentor_journal_definition)) = 0
+     or position('notes' in lower(pg_get_function_result('public.get_mentor_student_journal(uuid)'::regprocedure))) > 0 then
+    raise exception 'Mentor journal access must be assignment/consent scoped and exclude free-text notes.';
+  end if;
+  select pg_get_functiondef('public.get_research_survey_summary()'::regprocedure)
+    into research_survey_definition;
+  if position('researcher' in lower(research_survey_definition)) = 0
+     or position('withdrawn_at is null' in lower(research_survey_definition)) = 0
+     or position('count(*) >= 5' in lower(research_survey_definition)) = 0
+     or position('student_id' in lower(pg_get_function_result('public.get_research_survey_summary()'::regprocedure))) > 0
+     or position('feedback' in lower(pg_get_function_result('public.get_research_survey_summary()'::regprocedure))) > 0 then
+    raise exception 'Survey summary must be role-gated, consent-scoped, aggregate-only, and suppress small cells.';
   end if;
   if has_function_privilege('anon', 'public.confirm_mentor_weekly_status(uuid,date,text,text)', 'execute') then
     raise exception 'Anonymous users must not confirm outcomes.';

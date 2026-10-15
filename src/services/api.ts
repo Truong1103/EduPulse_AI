@@ -4,6 +4,7 @@ import {
   InvitedUser,
   StudentContact,
   ConsentRecord,
+  StudentDataRequest,
   Goal,
   PlanningStatus,
   PlanVersion,
@@ -25,9 +26,11 @@ import {
   MentorAssignment,
   MentorStatistics,
   MentorStudentLevelStatistics,
+  MentorStudentJournalEntry,
   ConfirmedStudyOutcome,
   ResearchAnalysisSnapshot,
-  ResearchSupportAndPredictionSummary
+  ResearchSupportAndPredictionSummary,
+  ResearchSurveySummary
 } from '../types';
 
 // ============================================================================
@@ -720,6 +723,22 @@ export async function requestDataAction(studentId: string, type: 'export' | 'del
   return res;
 }
 
+export async function getMyDataRequests(studentId: string): Promise<StudentDataRequest[]> {
+  const { data, error } = await supabase
+    .from('data_requests')
+    .select('id, type, status, requested_at, completed_at')
+    .eq('student_id', studentId)
+    .order('requested_at', { ascending: false });
+  throwIfError(error, 'Không tải được trạng thái yêu cầu dữ liệu.');
+  return (data || []).map((row) => ({
+    id: row.id,
+    type: row.type,
+    status: row.status,
+    requestedAt: row.requested_at,
+    completedAt: row.completed_at || undefined
+  }));
+}
+
 // ============================================================================
 // 3. CHỨC NĂNG NGƯỜI HƯỚNG DẪN & GVHD (ROLE: MENTOR & LEAD MENTOR)
 // ============================================================================
@@ -744,6 +763,23 @@ export async function getMentorStudentSummaries(mentorId: string) {
   throwIfError(error, 'Không tải được tổng kết tuần của học sinh.');
   if (!data) return [];
   return data;
+}
+
+export async function getMentorStudentJournal(studentId: string): Promise<MentorStudentJournalEntry[]> {
+  const { data, error } = await supabase.rpc('get_mentor_student_journal', { p_student_id: studentId });
+  throwIfError(error, 'Không tải được nhật ký học sinh được phân công.');
+  return (data || []).map((row: Record<string, any>) => ({
+    sessionDate: row.session_date,
+    goalTitle: row.goal_title || '',
+    activityGroup: row.activity_group || '',
+    status: row.status,
+    durationMin: row.duration_min == null ? null : Number(row.duration_min),
+    motivation: row.motivation == null ? null : Number(row.motivation),
+    difficulty: row.difficulty == null ? null : Number(row.difficulty),
+    barrier: row.barrier || null,
+    intentContinue: row.intent_continue == null ? null : Number(row.intent_continue),
+    skippedFields: Array.isArray(row.skipped_fields) ? row.skipped_fields : []
+  }));
 }
 
 export async function getMentorCohortStatistics(
@@ -1778,7 +1814,10 @@ export async function resolveDataRequest(id: string, status: 'completed' | 'reje
     target: `data_requests:${id}`,
     meta: { status }
   });
-  const res = await supabase.from('data_requests').update({ status }).eq('id', id);
+  const res = await supabase.from('data_requests').update({
+    status,
+    completed_at: new Date().toISOString()
+  }).eq('id', id);
   throwIfError(res.error, 'Không cập nhật được yêu cầu dữ liệu.');
   return res;
 }
@@ -2151,6 +2190,24 @@ export async function getResearchSupportAndPredictionSummary(): Promise<Research
       }))
     }
   };
+}
+
+export async function getResearchSurveySummary(): Promise<ResearchSurveySummary[]> {
+  const { data, error } = await supabase.rpc('get_research_survey_summary');
+  throwIfError(error, 'Không tải được báo cáo tổng hợp khảo sát.');
+  return (data || []).map((row: Record<string, unknown>) => {
+    const numberOrNull = (value: unknown) => value == null ? null : Number(value);
+    return {
+      surveyType: String(row.survey_type || ''),
+      responseCount: numberOrNull(row.response_count),
+      helpfulN: numberOrNull(row.helpful_n),
+      helpfulMean: numberOrNull(row.helpful_mean),
+      easeN: numberOrNull(row.ease_n),
+      easeMean: numberOrNull(row.ease_mean),
+      annoyanceN: numberOrNull(row.annoyance_n),
+      annoyanceMean: numberOrNull(row.annoyance_mean)
+    };
+  });
 }
 
 export async function saveResearchReportConfig(config: {

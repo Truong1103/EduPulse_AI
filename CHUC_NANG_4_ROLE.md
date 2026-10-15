@@ -19,7 +19,7 @@
 ### Đăng ký mục tiêu (onboarding)
 - Route `register` là wizard 3 bước riêng: chọn 1 trong 5 lĩnh vực (học thuật, ngoại ngữ, thể thao, nghệ thuật, kỹ năng), đặt tên mục tiêu, chọn 1–5 buổi/tuần và thời lượng 20/30/45/60 phút, xem tóm tắt rồi hoàn tất.
 - Wizard có nút quay lại/tiếp tục và đường dẫn sang đăng nhập nếu đã có tài khoản.
-- **Giới hạn hiện tại:** callback hoàn tất trong `App.tsx` chỉ hiển thị toast và chuyển sang Student; mục tiêu từ wizard chưa được ghi vào Supabase. Tạo mục tiêu thật hiện thực hiện ở tab Student → Kế hoạch.
+- Khi chưa đăng nhập, lựa chọn wizard được giữ trong phiên trình duyệt; sau khi xác thực bằng tài khoản Student, mục tiêu và tần suất được ghi vào Supabase. Thời lượng được lưu trong mô tả mục tiêu; ngày/giờ cụ thể có thể thiết lập ở Kế hoạch.
 - Chưa thấy form quên mật khẩu hoặc nút gửi lại email xác nhận trong source hiện tại.
 
 ### Trang công khai
@@ -98,7 +98,7 @@
 - Ghi consent theo phiên bản biểu mẫu và xác nhận phụ huynh nếu cần; xem thời điểm/trạng thái consent.
 - Cập nhật danh bạ cá nhân tách khỏi dữ liệu huấn luyện: tên, lớp, điện thoại, email, liên hệ phụ huynh.
 - Tải JSON dữ liệu cá nhân.
-- Gửi yêu cầu xóa dữ liệu để Admin xử lý; rút consent khỏi nghiên cứu qua RPC.
+- Gửi yêu cầu xóa dữ liệu để Admin xử lý; xem trạng thái pending/processing/completed/rejected tại cùng tab. Rút consent khỏi nghiên cứu qua RPC.
 
 ## 2. Mentor — Bàn làm việc cố vấn
 
@@ -106,7 +106,7 @@
 - Chỉ liệt kê học sinh đã consent và được gán cho Mentor.
 - Tìm theo mã HS/nhóm hoạt động; lọc nhóm hoạt động và xem số kết quả.
 - Thẻ học sinh hiển thị tiến độ tuần, kế hoạch gốc/hiện tại, phần trăm hoàn thành, trạng thái tuần và tình trạng phụ huynh xác nhận.
-- Bấm thẻ mở chi tiết: thông tin nhóm, biểu đồ tuần và các yêu cầu hỗ trợ liên quan.
+- Bấm thẻ mở hồ sơ gồm mục tiêu, lịch và việc cần làm, nhật ký đã lược bỏ ghi chú riêng, tiến độ tuần, báo nghỉ, yêu cầu hỗ trợ, phản hồi đã gửi và buddy liên quan. Chỉ học sinh được phân công còn consent; không hiện thông tin liên hệ hay điểm nguy cơ.
 - Mở form xác nhận trạng thái cho trường hợp mất liên lạc: tuần, trạng thái, ghi chú xác minh qua kênh cam kết.
 - Không hiển thị điểm nguy cơ hoặc bảng xếp hạng nguy cơ.
 
@@ -137,6 +137,7 @@
 
 ### 3.1 Báo cáo hiệu quả
 - Cấu hình mẫu số `N_obs`, `N_all` hoặc `N_comp`; ngưỡng retention, target, cỡ mẫu tối thiểu và chênh lệch tối thiểu.
+- Tab Khảo sát học sinh tổng hợp hữu ích/dễ dùng/mức phiền theo loại survey; chỉ tính consent còn hiệu lực, ẩn nhóm dưới 5 và không trả lời tự do/định danh.
 - Cấu hình được lưu ở `research_report_config` và nạp lại sau refresh.
 - KPI X/Y/Z/T: học sinh đang quan sát, cờ nguy cơ, chênh lệch retention và thời gian theo dõi; nhấp X mở danh sách mã HS.
 - Bảng so sánh intervention/control theo N_all, N_obs, cờ AI, retention kế hoạch gốc/hiện tại.
@@ -224,7 +225,7 @@
 
 ## 5. Liên kết dữ liệu giữa các role
 
-- Student tạo consent, mục tiêu, kế hoạch, nhật ký, nghỉ, trạng thái tuần, khảo sát, support request, buddy invitation và reminder preferences.
+- Student tạo consent, mục tiêu, kế hoạch/công việc, nhật ký, nghỉ, trạng thái tuần, khảo sát, support request, buddy invitation, data request và reminder preferences.
 - Mentor xem học sinh đã consent/được phân công, xử lý yêu cầu, ghi trạng thái tuần, gửi khích lệ và (nếu là Lead) duyệt nhóm/test set.
 - Researcher phân tích dữ liệu qua view giả danh/aggregate, đề xuất phân nhóm và export CSV khử định danh.
 - Admin cấp quyền, quản lý allowlist, nguồn/nội dung, phân công, data requests, contacts, cấu hình và jobs.
@@ -235,5 +236,5 @@
 - Model được mô tả là huấn luyện offline; dashboard hiện xem/khóa version và yêu cầu mở test set, không huấn luyện model trực tiếp.
 - P‑R curve chưa tính được nếu không có prediction scores và ground-truth labels theo từng mẫu.
 - Mô phỏng nằm ngoài production; thao tác với schema `sim` hiện cần script SQL riêng.
-- Wizard onboarding ở route `register` chưa persist goal; chưa có quên mật khẩu/resend email confirmation. Đăng nhập email/mật khẩu vẫn có trong source dù Google là lựa chọn phù hợp hơn cho nghiên cứu dài hạn.
-- Các policy/RPC/view mới nằm trong [migration `20261008000003_role_data_rls.sql`](supabase/migrations/20261008000003_role_data_rls.sql). Cần áp dụng migration lên Supabase để các kiểm soát/RPC mới có hiệu lực ở DB thật.
+- Chưa có quên mật khẩu/resend email confirmation. Đăng nhập email/mật khẩu vẫn có trong source dù Google là lựa chọn phù hợp hơn cho nghiên cứu dài hạn.
+- Các policy/RPC/view bổ sung cho hồ sơ Mentor, nội dung hỗ trợ và báo cáo khảo sát nằm trong [migration `20261015000000_mentor_student_detail_access.sql`](supabase/migrations/20261015000000_mentor_student_detail_access.sql). Cần áp dụng migration lên Supabase để các luồng mới có hiệu lực ở DB thật.

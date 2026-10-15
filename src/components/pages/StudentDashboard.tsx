@@ -37,7 +37,7 @@ import {
   ListTodo,
   Trash2
 } from 'lucide-react';
-import { Goal, PlanVersion, PlanTask, SessionLog, RestPeriod, WeeklyStatus, ReminderPrefs, SupportInvite, SupportRequest, WeeklySummary, ConsentRecord, EvidenceSource } from '../../types';
+import { Goal, PlanVersion, PlanTask, SessionLog, RestPeriod, WeeklyStatus, ReminderPrefs, SupportInvite, SupportRequest, WeeklySummary, ConsentRecord, EvidenceSource, StudentDataRequest } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
 import { RoleWorkspace } from '../common/RoleWorkspace';
 import { StudentPlanningWorkspace } from './StudentPlanningWorkspace';
@@ -69,6 +69,7 @@ import {
   createSupportRequest,
   submitSurvey,
   requestDataAction,
+  getMyDataRequests,
   getEvidenceSources,
   getAssignedMentor,
   getBuddyLinks,
@@ -204,6 +205,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
   const [buddyLinks, setBuddyLinks] = useState<any[]>([]);
   const [buddyCode, setBuddyCode] = useState('');
   const [mySurveys, setMySurveys] = useState<any[]>([]);
+  const [myDataRequests, setMyDataRequests] = useState<StudentDataRequest[]>([]);
   const [baseline, setBaseline] = useState<Record<string, string>>({});
   const [detailKind, setDetailKind] = useState<null | 'logs' | 'rest' | 'invites' | 'plan' | 'week'>(null);
   const [detailFilter, setDetailFilter] = useState<string>('');
@@ -400,7 +402,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
     setLoading(true);
     setLoadError(null);
     try {
-      const [cData, gData, taskData, lData, rpData, wsData, wStatData, remData, siData, srData, srcData, mentorData, buddyData, surveyRows, contactRow] = await Promise.all([
+      const [cData, gData, taskData, lData, rpData, wsData, wStatData, remData, siData, srData, srcData, mentorData, buddyData, surveyRows, contactRow, dataRequestRows] = await Promise.all([
         getStudentConsent(studentId),
         getStudentGoals(studentId),
         getStudentPlanTasks(studentId),
@@ -415,7 +417,8 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
         getAssignedMentor(studentId),
         getBuddyLinks(studentId),
         getMySurveys(studentId),
-        getOwnContact(studentId)
+        getOwnContact(studentId),
+        getMyDataRequests(studentId)
       ]);
 
       setConsent(cData);
@@ -443,6 +446,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
       setAssignedMentor(mentorData);
       setBuddyLinks(buddyData);
       setMySurveys(surveyRows);
+      setMyDataRequests(dataRequestRows);
       setOwnContact(contactRow);
       if (contactRow) {
         setContactForm({
@@ -761,25 +765,61 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
   };
 
   const handleDownloadData = async () => {
+    let requestTrackingFailed = false;
+    let exportDataRequests = myDataRequests;
     try {
-      await requestDataAction(studentId, 'export');
+      const hasPendingExport = myDataRequests.some((request) => request.type === 'export' && request.status === 'pending');
+      if (!hasPendingExport) {
+        await requestDataAction(studentId, 'export');
+        exportDataRequests = await getMyDataRequests(studentId);
+        setMyDataRequests(exportDataRequests);
+      }
     } catch {
-      // vẫn cho tải local nếu hàng đợi admin lỗi
+      requestTrackingFailed = true;
     }
-    const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify({
-      studentCode,
-      goal,
-      planVersions,
-      sessionLogs,
-      restPeriods
-    }, null, 2));
-    const downloadAnchor = document.createElement('a');
-    downloadAnchor.setAttribute('href', dataStr);
-    downloadAnchor.setAttribute('download', `edupulse_data_${studentCode}.json`);
-    document.body.appendChild(downloadAnchor);
-    downloadAnchor.click();
-    downloadAnchor.remove();
-    onAddToast('Đã tải dữ liệu', 'Bản sao dữ liệu của bạn đã được tải về thiết bị.', 'success');
+
+    try {
+      const planVersionsByGoal = Object.fromEntries(await Promise.all(
+        goals.map(async (item) => [item.id, await getPlanVersions(item.id)] as const)
+      ));
+      const exportData = {
+        exportedAt: new Date().toISOString(),
+        studentCode,
+        consent,
+        contact: ownContact,
+        goals,
+        planVersions: planVersionsByGoal,
+        planTasks,
+        sessionLogs,
+        restPeriods,
+        weeklySummaries,
+        weeklyStatuses,
+        reminderPrefs,
+        supportInvites,
+        supportRequests,
+        surveys: mySurveys,
+        buddyLinks,
+        dataRequests: exportDataRequests
+      };
+      const file = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+      const downloadUrl = URL.createObjectURL(file);
+      const downloadAnchor = document.createElement('a');
+      downloadAnchor.href = downloadUrl;
+      downloadAnchor.download = `edupulse_data_${studentCode}.json`;
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 0);
+      onAddToast(
+        'Đã tải dữ liệu',
+        requestTrackingFailed
+          ? 'Bản sao hồ sơ đã tải xuống, nhưng chưa ghi được yêu cầu vào hàng đợi Admin.'
+          : 'Bản sao hồ sơ và lịch sử kế hoạch đã tải về thiết bị.',
+        requestTrackingFailed ? 'warning' : 'success'
+      );
+    } catch (error) {
+      onAddToast('Chưa xuất được dữ liệu', error instanceof Error ? error.message : 'Vui lòng thử lại.', 'warning');
+    }
   };
 
   if (loading) {
@@ -2939,12 +2979,18 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
 
                   <button
                     onClick={async () => {
-                      await requestDataAction(studentId, 'deletion');
-                      onAddToast('Đã gửi yêu cầu xóa', 'Admin xử lý trên hàng đợi data_requests. Rút lui không tự tính là bỏ mục tiêu.', 'info');
+                      try {
+                        await requestDataAction(studentId, 'deletion');
+                        setMyDataRequests(await getMyDataRequests(studentId));
+                        onAddToast('Đã gửi yêu cầu xóa', 'Admin xử lý trên hàng đợi dữ liệu. Trạng thái sẽ hiển thị tại đây.', 'info');
+                      } catch (error) {
+                        onAddToast('Chưa gửi được yêu cầu', error instanceof Error ? error.message : 'Vui lòng thử lại.', 'warning');
+                      }
                     }}
+                    disabled={myDataRequests.some((request) => request.type === 'deletion' && request.status === 'pending')}
                     className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs cursor-pointer"
                   >
-                    Yêu cầu xóa dữ liệu
+                    {myDataRequests.some((request) => request.type === 'deletion' && request.status === 'pending') ? 'Đang chờ xử lý yêu cầu xóa' : 'Yêu cầu xóa dữ liệu'}
                   </button>
                   <button
                     onClick={handleWithdrawConsent}
@@ -2952,6 +2998,36 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onAddToast }
                   >
                     Rút lui khỏi nghiên cứu
                   </button>
+                </div>
+                <div className="space-y-3 border-t border-slate-100 pt-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h4 className="text-sm font-bold text-slate-800">Trạng thái yêu cầu dữ liệu</h4>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          setMyDataRequests(await getMyDataRequests(studentId));
+                        } catch (error) {
+                          onAddToast('Chưa tải được trạng thái', error instanceof Error ? error.message : 'Vui lòng thử lại.', 'warning');
+                        }
+                      }}
+                      className="text-xs font-semibold text-sky-700 hover:text-sky-900"
+                    >
+                      Cập nhật trạng thái
+                    </button>
+                  </div>
+                  {myDataRequests.length === 0 ? (
+                    <p className="text-xs text-slate-500">Bạn chưa gửi yêu cầu xuất hoặc xóa dữ liệu.</p>
+                  ) : myDataRequests.map((request) => (
+                    <div key={request.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs">
+                      <span className="font-semibold text-slate-700">{request.type === 'deletion' ? 'Xóa dữ liệu' : 'Xuất dữ liệu'}</span>
+                      <span className={request.status === 'completed' ? 'font-semibold text-emerald-700' : request.status === 'rejected' ? 'font-semibold text-rose-700' : 'font-semibold text-amber-700'}>
+                        {request.status === 'pending' ? 'Đang chờ' : request.status === 'processing' ? 'Đang xử lý' : request.status === 'completed' ? 'Đã hoàn tất' : 'Đã từ chối'}
+                      </span>
+                      <time className="text-slate-500">Gửi {new Date(request.requestedAt).toLocaleString('vi-VN')}</time>
+                      {request.completedAt && <time className="text-slate-500">Cập nhật {new Date(request.completedAt).toLocaleString('vi-VN')}</time>}
+                    </div>
+                  ))}
                 </div>
               </div>
             </motion.div>
