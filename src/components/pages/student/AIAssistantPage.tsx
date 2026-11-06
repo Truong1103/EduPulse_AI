@@ -62,13 +62,13 @@ export const AIAssistantPage: React.FC<AIAssistantPageProps> = ({
     {
       id: 'welcome',
       sender: 'assistant',
-      text: `Xin chào ${currentUser?.fullName || 'bạn'}! Mình là AI Đồng hành rèn luyện của EduPulse. Bạn đang gặp vướng mắc gì về việc học, mục tiêu cá nhân, hoặc cần chiến thuật vượt qua sự trì hoãn hôm nay?`,
+      text: `Xin chào ${currentUser?.fullName || 'bạn'}! Mình là AI Đồng hành của EduPulse. Bạn có thể hỏi về các chức năng trên website, kế hoạch học tập, hoặc bất kỳ chủ đề nào khác. Mình sẽ cố gắng trả lời đúng trọng tâm câu hỏi của bạn.`,
       timestamp: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
       actionSuggestions: [
-        'Làm sao để vượt qua cảm giác lười biếng hôm nay?',
-        'Cách áp dụng phương pháp Pomodoro hiệu quả',
-        'Em đang có việc quá hạn, nên bắt đầu từ đâu?',
-        'Kỹ thuật Feynman giúp ghi nhớ kiến thức sâu'
+        'Website EduPulse có những chức năng nào?',
+        'Giúp mình chia nhỏ mục tiêu học tiếng Anh',
+        'Giải thích trí tuệ nhân tạo hoạt động như thế nào?',
+        'Gợi ý cách tập trung khi học'
       ]
     }
   ]);
@@ -99,14 +99,32 @@ export const AIAssistantPage: React.FC<AIAssistantPageProps> = ({
       const todayStr = new Date().toLocaleDateString('sv-SE');
       const overdueCount = tasks.filter((t) => !t.completed && t.dueDate && t.dueDate < todayStr).length;
       const completedCount = tasks.filter((t) => t.completed).length;
+      const history = chatMessages
+        .filter((msg) => msg.id !== 'welcome')
+        .slice(-12)
+        .map(({ sender, text }) => ({ sender, text }));
 
       const response = await askAICompanion(textToSend.trim(), {
         goalsCount: goals.length,
         tasksCount: tasks.length,
         completedCount,
-        streakDays: 3,
-        overdueCount
-      });
+        overdueCount,
+        goals: goals.slice(0, 20).map((goal) => ({
+          title: goal.planTitle,
+          description: goal.description,
+          activityGroup: goal.activityGroup,
+          status: goal.status,
+          targetDate: goal.targetDate
+        })),
+        tasks: tasks.slice(0, 40).map((task) => ({
+          title: task.title,
+          description: task.description,
+          dueDate: task.dueDate,
+          completed: task.completed,
+          priority: task.priority,
+          estimatedMinutes: task.estimatedMinutes
+        }))
+      }, history);
 
       const aiMsg: AIChatMessage = {
         id: String(Date.now() + 1),
@@ -581,7 +599,7 @@ export const AIAssistantPage: React.FC<AIAssistantPageProps> = ({
                 type="text"
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
-                placeholder="Hỏi AI về cách học, giải tỏa trì hoãn, chia thời gian..."
+                placeholder="Hỏi về EduPulse hoặc bất kỳ chủ đề nào bạn quan tâm..."
                 className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500/30"
               />
               <button

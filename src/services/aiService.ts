@@ -616,36 +616,15 @@ export interface InterestExplainerResult {
 export async function explainWithInterests(
   input: InterestExplainerInput
 ): Promise<InterestExplainerResult> {
-  // 1. Ưu tiên gọi Gemini trực tiếp nếu có API Key hợp lệ
-  try {
-    const prompt = `Bạn là Gia sư AI Sáng tạo EduPulse.
-Học sinh cần giải thích khái niệm: "${input.question}"
-Lĩnh vực: "${input.activityGroup || 'Học tập'}"
-Sở thích cá nhân: ${input.interests?.length ? input.interests.join(', ') : 'Trò chơi điện tử, Công nghệ'}
-Trình độ: "${input.currentLevel || 'Cơ bản'}"
-
-Yêu cầu:
-- Sử dụng trực tiếp sở thích của học sinh làm ẩn dụ (ví dụ Game: level up, loot đồ, mana; Bóng đá: pressing, chuyền bóng; Nấu ăn: nhiệt độ, gia vị; Âm nhạc: tiết tấu, hợp âm).
-- Viết sinh động, dễ hiểu, không rập khuôn.
-- Trả về JSON duy nhất theo schema:
-{
-  "explanation": "Lời giải thích liên hệ sâu sắc với sở thích...",
-  "examples": ["Ví dụ thực tế 1", "Ví dụ thực tế 2"],
-  "miniExercise": "1 thử thách nhỏ 5-10 phút",
-  "checkQuestion": "1 câu hỏi tư duy ngắn"
-}`;
-
-    const raw = await callDirectGemini(prompt, true);
-    return JSON.parse(raw);
-  } catch {
-    // 2. Thử gọi Supabase Edge Function nếu đã deploy
-    try {
-      return await callEdgeFunction<InterestExplainerResult>('ai-interest-explainer', input as unknown as Record<string, unknown>);
-    } catch {
-      // 3. Dynamic Multi-Domain Analogy Engine (Thay thế hoàn toàn template cứng cũ)
-      return generateDynamicInterestAnalogy(input);
-    }
+  if (!input.question.trim()) {
+    throw new Error('Vui lòng nhập câu hỏi cần giải thích.');
   }
+
+  return callEdgeFunction<InterestExplainerResult>('ai-interest-explainer', {
+    ...input,
+    question: input.question.trim(),
+    interests: input.interests.map((interest) => interest.trim()).filter(Boolean)
+  });
 }
 
 // Bộ phân tích ẩn dụ đa tầng theo từng môn học & từng sở thích
@@ -799,53 +778,34 @@ export async function askAICompanion(
     goalsCount: number;
     tasksCount: number;
     completedCount: number;
-    streakDays: number;
     overdueCount: number;
-  }
+    goals: Array<{
+      title: string;
+      description: string;
+      activityGroup: string;
+      status: string;
+      targetDate: string;
+    }>;
+    tasks: Array<{
+      title: string;
+      description: string;
+      dueDate?: string;
+      completed: boolean;
+      priority: string;
+      estimatedMinutes?: number;
+    }>;
+  },
+  history: Array<Pick<AIChatMessage, 'sender' | 'text'>> = []
 ): Promise<{ reply: string; actionSuggestions?: string[] }> {
-  // 1. Ưu tiên gọi Gemini trực tiếp nếu có API Key
-  try {
-    const prompt = `Bạn là Trợ lý Trí tuệ Nhân tạo Toàn diện của EduPulse AI (kết hợp vai trò Cố vấn Học tập & Nền tảng EduPulse AI, đồng thời là một Trợ lý Tri thức Thông thái như ChatGPT).
-
-Dữ liệu thực tế của học sinh hiện tại:
-- Số mục tiêu đang theo đuổi: ${context.goalsCount}
-- Tổng nhiệm vụ: ${context.tasksCount} (Đã hoàn thành: ${context.completedCount})
-- Chuỗi ngày rèn luyện liên tục (Streak): ${context.streakDays} ngày
-- Số việc quá hạn hiện tại: ${context.overdueCount}
-
-Kiến thức nền tảng EduPulse AI bạn nắm giữ:
-- Module Hôm nay (Today): Quản lý việc trong ngày theo 5 nhóm (Quan trọng, Thường, Dễ, Đã xong, Quá hạn), thanh tiến độ % tự đổi màu, cảnh báo quá tải khi > 4 giờ hoặc > 6 việc, tính streak 7 ngày.
-- Module Kế hoạch (My Plans): Quản lý mục tiêu, tạo lộ trình tự động bằng AI (AI Plan Generator), quản lý phiên bản kế hoạch (Plan Versioning), thống kê đúng hạn/quá hạn.
-- Module Lịch biểu (Calendar): 4 chế độ Tháng, Tuần, Ngày, Danh sách; đồng bộ tức thì với Today và Kế hoạch.
-- Module Tiến độ (Progress): 11 biểu đồ phân tích chuyên sâu, Bản đồ nhiệt Activity Heatmap, tạo và xuất Báo cáo cá nhân hóa AI 9 phần ra file PDF.
-- Module Nhật ký (Journal): Ghi chép cảm xúc, emoji động lực (1-5 sao), độ khó, tự động lưu bản nháp draft.
-- Module Cài đặt (Settings): Pomodoro (25/45/60 phút), mục tiêu phút học mỗi ngày, thông báo web/email.
-
-Học sinh hỏi: "${message}"
-
-Yêu cầu câu trả lời:
-- Trả lời ĐÚNG TRỌNG TÂM câu hỏi. Nếu hỏi về EduPulse, hãy giải thích chính xác các tính năng. Nếu hỏi kiến thức ngoài (Khoa học, Toán, Lý, Hóa, Ngoại ngữ, Lập trình, Lịch sử, Đời sống, Viết lách...), hãy trả lời thông thái, sâu sắc, phong phú và chính xác như ChatGPT.
-- Định dạng Markdown rõ ràng, dễ đọc (in đậm, gạch đầu dòng).
-- Trả về DUY NHẤT một JSON hợp lệ theo schema:
-{
-  "reply": "Nội dung câu trả lời đầy đủ, cuốn hút và đúng trọng tâm...",
-  "actionSuggestions": ["Gợi ý hành động 1", "Gợi ý hành động 2", "Gợi ý hành động 3"]
-}`;
-
-    const raw = await callDirectGemini(prompt, true);
-    return JSON.parse(raw);
-  } catch {
-    // 2. Thử gọi Supabase Edge Function nếu đã deploy
-    try {
-      return await callEdgeFunction<{ reply: string; actionSuggestions?: string[] }>('ai-companion-chat', {
-        message,
-        context
-      });
-    } catch {
-      // 3. Omni-Knowledge Answering Engine (Hệ thống tri thức toàn diện)
-      return generateDynamicCompanionAdvice(message, context);
-    }
+  if (!message.trim()) {
+    throw new Error('Vui lòng nhập câu hỏi.');
   }
+
+  return callEdgeFunction<{ reply: string; actionSuggestions?: string[] }>('ai-companion-chat', {
+    message: message.trim(),
+    context,
+    history: history.slice(-12).map(({ sender, text }) => ({ sender, text }))
+  });
 }
 
 // Engine tri thức toàn diện: Vừa am hiểu toàn bộ EduPulse, vừa là bách khoa tri thức như ChatGPT
