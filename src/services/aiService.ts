@@ -44,6 +44,25 @@ async function callEdgeFunction<T>(
         `Tính năng AI (${functionName}) chưa được kích hoạt. Hãy deploy Supabase Edge Functions.`
       );
     }
+
+    const response = error.context instanceof Response ? error.context : null;
+    if (response) {
+      let serverError = '';
+      try {
+        const payload: unknown = await response.clone().json();
+        if (typeof payload === 'object' && payload !== null && 'error' in payload) {
+          const errorValue = payload.error;
+          if (typeof errorValue === 'string') serverError = errorValue.trim();
+        }
+      } catch {
+        // Fall back to the HTTP status when the function response isn't JSON.
+      }
+
+      if (serverError) throw new Error(`Lỗi AI (${response.status}): ${serverError}`);
+
+      throw new Error(`Lỗi AI (${response.status}): ${error.message || 'Edge Function trả về lỗi.'}`);
+    }
+
     throw new Error(error.message || 'Lỗi khi gọi AI.');
   }
 
