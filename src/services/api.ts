@@ -1292,6 +1292,71 @@ export async function updateUserRole(
   return res;
 }
 
+export async function updateUserStatus(userId: string, newStatus: 'active' | 'disabled', adminId?: string) {
+  await supabase.from('audit_log').insert({
+    actor_id: adminId,
+    actor_role: 'admin',
+    action: 'update_user_status',
+    target: `profiles:${userId}`,
+    meta: { newStatus, updatedAt: new Date().toISOString() }
+  });
+
+  const res = await supabase.from('profiles').update({ status: newStatus, updated_at: new Date().toISOString() }).eq('id', userId);
+  throwIfError(res.error, 'Không cập nhật được trạng thái tài khoản.');
+  return res;
+}
+
+export async function updateUserProfile(
+  userId: string,
+  data: { fullName?: string; studentCode?: string; avatarUrl?: string }
+) {
+  const patch: Record<string, unknown> = {
+    updated_at: new Date().toISOString()
+  };
+  if (data.fullName !== undefined) {
+    patch.full_name = data.fullName;
+    patch.ten = data.fullName;
+  }
+  if (data.studentCode !== undefined) {
+    patch.student_code = data.studentCode;
+  }
+  if (data.avatarUrl !== undefined) {
+    patch.avatar_url = data.avatarUrl;
+  }
+
+  const res = await supabase.from('profiles').update(patch).eq('id', userId);
+  throwIfError(res.error, 'Không cập nhật được thông tin hồ sơ.');
+  return res;
+}
+
+export async function getAdminSystemAnalytics() {
+  const [
+    { count: totalUsers },
+    { count: activeUsers },
+    { count: totalGoals },
+    { count: totalTasks },
+    { count: completedTasks },
+    { count: totalAiReports }
+  ] = await Promise.all([
+    supabase.from('profiles').select('*', { count: 'exact', head: true }),
+    supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('status', 'active'),
+    supabase.from('goals').select('*', { count: 'exact', head: true }),
+    supabase.from('plan_tasks').select('*', { count: 'exact', head: true }),
+    supabase.from('plan_tasks').select('*', { count: 'exact', head: true }).eq('completed', true),
+    supabase.from('ai_personalized_reports').select('*', { count: 'exact', head: true })
+  ]);
+
+  return {
+    totalUsers: totalUsers || 0,
+    activeUsers: activeUsers || 0,
+    totalGoals: totalGoals || 0,
+    totalTasks: totalTasks || 0,
+    completedTasks: completedTasks || 0,
+    completionRate: totalTasks && totalTasks > 0 ? Math.round(((completedTasks || 0) / totalTasks) * 100) : 0,
+    totalAiReports: totalAiReports || 0
+  };
+}
+
 export async function deleteUserAccount(userId: string, adminId: string) {
   if (!userId || !adminId) throw new Error('Không có tài khoản hoặc Admin để thực hiện thao tác.');
 

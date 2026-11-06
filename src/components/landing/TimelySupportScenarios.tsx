@@ -246,7 +246,7 @@ export const TimelySupportScenarios: React.FC<TimelySupportScenariosProps> = ({
                   className={`w-full py-3.5 px-4 rounded-xl font-semibold text-sm transition-all flex items-center justify-center gap-2 cursor-pointer ${
                     actionDone[current.id]
                       ? 'bg-emerald-50 text-emerald-700 border border-emerald-300'
-                      : 'bg-slate-900 text-white hover:bg-blue-600 shadow-md active:scale-95'
+                      : 'bg-sky-600 text-white hover:bg-sky-700 shadow-md active:scale-95'
                   }`}
                 >
                   {actionDone[current.id] ? (

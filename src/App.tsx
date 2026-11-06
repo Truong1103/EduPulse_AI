@@ -28,12 +28,10 @@ import { HowItWorksPage } from './components/pages/HowItWorksPage';
 import { AboutPage } from './components/pages/AboutPage';
 import { LoginPage } from './components/pages/LoginPage';
 import { RegisterOnboardingPage } from './components/pages/RegisterOnboardingPage';
-import { createPlanVersion, createStudentGoal } from './services/api';
+import { createGoal } from './services/planService';
 
-// 4 Role Dashboards
+// Dashboards (Chỉ Student & Admin)
 import { StudentDashboard } from './components/pages/StudentDashboard';
-import { MentorDashboard } from './components/pages/MentorDashboard';
-import { ResearcherDashboard } from './components/pages/ResearcherDashboard';
 import { AdminDashboard } from './components/pages/AdminDashboard';
 
 const PENDING_ONBOARDING_KEY = 'edupulse_pending_onboarding';
@@ -51,11 +49,8 @@ function getOnboardingValidationError(newGoal: OnboardingGoal): string | null {
   if (!['academic', 'language', 'sports', 'arts', 'skills'].includes(String(newGoal.category))) {
     return 'Lĩnh vực mục tiêu không hợp lệ.';
   }
-  if (!Number.isInteger(newGoal.targetDaysPerWeek) || newGoal.targetDaysPerWeek < 1 || newGoal.targetDaysPerWeek > 5) {
-    return 'Tần suất luyện tập phải từ 1 đến 5 buổi mỗi tuần.';
-  }
-  if (![20, 30, 45, 60].includes(newGoal.durationMins)) {
-    return 'Thời lượng mỗi buổi không hợp lệ.';
+  if (!Number.isInteger(newGoal.targetDaysPerWeek) || newGoal.targetDaysPerWeek < 1 || newGoal.targetDaysPerWeek > 7) {
+    return 'Tần suất luyện tập phải từ 1 đến 7 buổi mỗi tuần.';
   }
   return null;
 }
@@ -68,8 +63,6 @@ const VALID_ROUTES: AppRoute[] = [
   'login',
   'register',
   'student',
-  'mentor',
-  'researcher',
   'admin'
 ];
 
@@ -85,48 +78,32 @@ function routeFromLocationHash(): AppRoute | null {
 
 async function saveOnboardingGoal(studentId: string, newGoal: OnboardingGoal) {
   const categoryLabels: Record<GoalCategory, string> = {
-    academic: 'Học tập / Học thuật',
+    academic: 'Học tập',
     language: 'Ngoại ngữ',
-    sports: 'Thể thao & Thể chất',
-    arts: 'Nghệ thuật & Sáng tạo',
-    skills: 'Kỹ năng cá nhân'
+    sports: 'Thể thao',
+    arts: 'Nghệ thuật',
+    skills: 'Kỹ năng'
   };
   const validationError = getOnboardingValidationError(newGoal);
   if (validationError) throw new Error(validationError);
   const title = newGoal.title.trim();
+  const today = new Date().toLocaleDateString('sv-SE');
+  const targetDate = new Date(Date.now() + 90 * 86400000).toLocaleDateString('sv-SE');
 
-  const { data, error } = await createStudentGoal(studentId, {
+  await createGoal({
+    studentId,
     planTitle: title,
-    successCriteria: title,
-    description: `Thời lượng dự kiến: ${newGoal.durationMins} phút mỗi buổi.`,
+    description: `Mục tiêu khởi đầu: ${newGoal.durationMins} phút mỗi buổi, ${newGoal.targetDaysPerWeek} buổi/tuần.`,
     activityGroup: categoryLabels[newGoal.category],
-    startDate: new Date().toISOString().slice(0, 10),
+    startDate: today,
+    targetDate: targetDate,
     priority: 'medium',
-    planningStatus: 'in_progress',
-    minTask: 'Hoàn thành một buổi luyện tập theo mục tiêu đã chọn'
+    dailyMinutes: newGoal.durationMins
   });
-  if (error) throw error;
-  if (!data?.id) throw new Error('Không nhận được mã mục tiêu mới.');
-
-  try {
-    await createPlanVersion({
-      goalId: data.id,
-      studentId,
-      effectiveFrom: new Date().toISOString().slice(0, 10),
-      sessionsPerWeek: newGoal.targetDaysPerWeek,
-      schedule: [],
-      reason: 'Nhịp luyện tập khởi đầu từ đăng ký'
-    });
-    return { planError: null as Error | null };
-  } catch (planError) {
-    return {
-      planError: planError instanceof Error ? planError : new Error('Không lưu được tần suất luyện tập.')
-    };
-  }
 }
 
 function AppContent() {
-  const { currentUser, isLeadMentor, isLoading } = useAuth();
+  const { currentUser, isLoading } = useAuth();
   const [currentRoute, setCurrentRoute] = useState<AppRoute>(() => routeFromLocationHash() || 'landing');
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const onboardingSaveInProgress = useRef(false);
@@ -148,7 +125,8 @@ function AppContent() {
     const fromOAuth = hash.includes('access_token=');
     if (pending || fromOAuth || currentRoute === 'login') {
       sessionStorage.removeItem(POST_AUTH_REDIRECT_KEY);
-      const dest = currentUser.role as AppRoute;
+      // Chuyển hướng trực tiếp vào màn hình tương ứng (student hoặc admin)
+      const dest: AppRoute = currentUser.role === 'admin' ? 'admin' : 'student';
       setCurrentRoute(dest);
       window.history.replaceState(null, '', `${window.location.pathname}#${dest}`);
     }
@@ -178,7 +156,7 @@ function AppContent() {
     if (!pending) return;
 
     if (currentUser.role !== 'student') {
-      addToast('Chưa lưu mục tiêu', 'Bản đăng ký chỉ được lưu vào tài khoản học sinh.', 'warning');
+      addToast('Chưa lưu kế hoạch', 'Bản đăng ký khởi đầu chỉ áp dụng cho tài khoản học sinh.', 'warning');
       return;
     }
 
@@ -187,32 +165,17 @@ function AppContent() {
       newGoal = JSON.parse(pending) as OnboardingGoal;
     } catch {
       sessionStorage.removeItem(PENDING_ONBOARDING_KEY);
-      addToast('Không đọc được mục tiêu', 'Vui lòng bắt đầu lại bước thiết lập mục tiêu.', 'warning');
-      return;
-    }
-    const validationError = getOnboardingValidationError(newGoal);
-    if (validationError) {
-      sessionStorage.removeItem(PENDING_ONBOARDING_KEY);
-      addToast('Thông tin mục tiêu không hợp lệ', validationError, 'warning');
       return;
     }
 
     onboardingSaveInProgress.current = true;
     saveOnboardingGoal(currentUser.id, newGoal)
-      .then(({ planError }) => {
+      .then(() => {
         sessionStorage.removeItem(PENDING_ONBOARDING_KEY);
-        if (planError) {
-          addToast('Mục tiêu đã lưu, nhịp luyện tập chưa lưu', planError.message, 'warning');
-        } else {
-          addToast('Đã lưu mục tiêu!', 'Mục tiêu và tần suất luyện tập đã được ghi vào hồ sơ của bạn.', 'success');
-        }
+        addToast('Đã tạo kế hoạch!', 'Mục tiêu học tập khởi đầu của bạn đã được lưu thành công.', 'success');
       })
       .catch((error) => {
-        addToast(
-          'Chưa lưu được mục tiêu',
-          error instanceof Error ? error.message : 'Vui lòng thử lại sau khi kiểm tra kết nối.',
-          'warning'
-        );
+        addToast('Chưa lưu được kế hoạch', error instanceof Error ? error.message : 'Vui lòng thử lại.', 'warning');
       })
       .finally(() => {
         onboardingSaveInProgress.current = false;
@@ -228,55 +191,9 @@ function AppContent() {
   const handleLoginSuccess = (role: AppRole) => {
     addToast(
       'Đăng nhập thành công!',
-      `Chào mừng bạn vào không gian làm việc với vai trò ${role.toUpperCase()}.`,
+      `Chào mừng bạn đến với EduPulse AI (${role === 'admin' ? 'Quản trị viên' : 'Học sinh'}).`,
       'success'
     );
-  };
-
-  const handleRegisterSubmit = async (newGoal?: {
-    title: string;
-    category: GoalCategory;
-    targetDaysPerWeek: number;
-    durationMins: number;
-  }) => {
-    if (!newGoal) return;
-    const validationError = getOnboardingValidationError(newGoal);
-    if (validationError) {
-      addToast('Thông tin mục tiêu không hợp lệ', validationError, 'warning');
-      return;
-    }
-    if (!currentUser) {
-      sessionStorage.setItem(PENDING_ONBOARDING_KEY, JSON.stringify(newGoal));
-      addToast('Cần đăng nhập học sinh', 'Lựa chọn của bạn được giữ trong phiên này; đăng nhập để lưu vào hồ sơ.', 'info');
-      navigateTo('login');
-      return;
-    }
-    if (currentUser.role !== 'student') {
-      addToast('Chỉ tài khoản học sinh mới lưu được mục tiêu đăng ký.', 'Đăng nhập bằng tài khoản học sinh để tiếp tục.', 'warning');
-      return;
-    }
-
-    try {
-      const { planError } = await saveOnboardingGoal(currentUser.id, newGoal);
-      if (planError) {
-        addToast(
-          'Mục tiêu đã lưu, nhịp luyện tập chưa lưu',
-          planError instanceof Error ? planError.message : 'Hãy cấu hình lại kế hoạch trong bàn làm việc học sinh.',
-          'warning'
-        );
-        navigateTo('student');
-        return;
-      }
-
-      addToast('Đã lưu mục tiêu!', 'Mục tiêu và tần suất luyện tập đã được ghi vào hồ sơ của bạn.', 'success');
-      navigateTo('student');
-    } catch (error) {
-      addToast(
-        'Chưa lưu được mục tiêu',
-        error instanceof Error ? error.message : 'Vui lòng thử lại sau khi kiểm tra kết nối.',
-        'warning'
-      );
-    }
   };
 
   const scrollToSection = (id: string) => {
@@ -303,15 +220,15 @@ function AppContent() {
       {/* Header / Navbar */}
       <Navbar currentRoute={currentRoute} onRouteChange={navigateTo} />
 
-      {/* Main Content Router with Smooth Page Entrance & Transition */}
+      {/* Main Content Router */}
       <main className="min-w-0 flex-1">
         <AnimatePresence mode="wait">
           <motion.div
             key={currentRoute}
-            initial={{ opacity: 0, y: 12 }}
+            initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            transition={{ duration: 0.38, ease: [0.16, 1, 0.3, 1] }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.25, ease: 'easeOut' }}
           >
             {currentRoute === 'landing' && (
               <div>
@@ -333,9 +250,7 @@ function AppContent() {
             )}
 
             {currentRoute === 'features' && <FeaturesPage onNavigate={navigateTo} />}
-
             {currentRoute === 'how-it-works' && <HowItWorksPage onNavigate={navigateTo} />}
-
             {currentRoute === 'about' && <AboutPage onNavigate={navigateTo} />}
 
             {currentRoute === 'login' && (
@@ -348,31 +263,38 @@ function AppContent() {
             {currentRoute === 'register' && (
               <RegisterOnboardingPage
                 onNavigate={navigateTo}
-                onCompleteOnboarding={handleRegisterSubmit}
+                onCompleteOnboarding={async (goal) => {
+                  if (!goal) return;
+                  if (!currentUser) {
+                    sessionStorage.setItem(PENDING_ONBOARDING_KEY, JSON.stringify(goal));
+                    addToast('Cần đăng nhập', 'Thông tin mục tiêu được giữ tạm, hãy đăng nhập để lưu.', 'info');
+                    navigateTo('login');
+                    return;
+                  }
+                  await saveOnboardingGoal(currentUser.id, goal);
+                  addToast('Thành công', 'Đã lưu mục tiêu của bạn.', 'success');
+                  navigateTo('student');
+                }}
               />
             )}
 
-            {/* 4 ROLE DASHBOARDS */}
+            {/* CHỈ CÒN 2 ROLE WORKSPACES: STUDENT VÀ ADMIN */}
             {currentRoute === 'student' && (
-              <RoleGate allowed={['student']} onGoLogin={() => navigateTo('login')} onGoHome={() => navigateTo((currentUser?.role || 'login') as AppRoute)}>
+              <RoleGate
+                allowed={['student']}
+                onGoLogin={() => navigateTo('login')}
+                onGoHome={() => navigateTo((currentUser?.role === 'admin' ? 'admin' : 'student') as AppRoute)}
+              >
                 <StudentDashboard onAddToast={addToast} />
               </RoleGate>
             )}
 
-            {currentRoute === 'mentor' && (
-              <RoleGate allowed={['mentor']} onGoLogin={() => navigateTo('login')} onGoHome={() => navigateTo((currentUser?.role || 'login') as AppRoute)}>
-                <MentorDashboard isLeadMentor={isLeadMentor} onAddToast={addToast} />
-              </RoleGate>
-            )}
-
-            {currentRoute === 'researcher' && (
-              <RoleGate allowed={['researcher']} onGoLogin={() => navigateTo('login')} onGoHome={() => navigateTo((currentUser?.role || 'login') as AppRoute)}>
-                <ResearcherDashboard onAddToast={addToast} />
-              </RoleGate>
-            )}
-
             {currentRoute === 'admin' && (
-              <RoleGate allowed={['admin']} onGoLogin={() => navigateTo('login')} onGoHome={() => navigateTo((currentUser?.role || 'login') as AppRoute)}>
+              <RoleGate
+                allowed={['admin']}
+                onGoLogin={() => navigateTo('login')}
+                onGoHome={() => navigateTo('student')}
+              >
                 <AdminDashboard onAddToast={addToast} />
               </RoleGate>
             )}
@@ -380,7 +302,7 @@ function AppContent() {
         </AnimatePresence>
       </main>
 
-      {!['student', 'mentor', 'researcher', 'admin'].includes(currentRoute) && (
+      {!['student', 'admin'].includes(currentRoute) && (
         <Footer onRouteChange={navigateTo} />
       )}
     </div>

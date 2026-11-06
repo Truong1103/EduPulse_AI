@@ -10,7 +10,8 @@ import {
   ArrowRight,
   Menu,
   X,
-  LogOut
+  LogOut,
+  UserCheck
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -22,11 +23,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   currentRoute,
   onRouteChange
 }) => {
-  const { currentUser, isLeadMentor, signOut } = useAuth();
+  const { currentUser, signOut } = useAuth();
   const [isScrolled, setIsScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  const isRolePage = ['student', 'mentor', 'researcher', 'admin'].includes(currentRoute);
+  const isRolePage = ['student', 'admin'].includes(currentRoute);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -82,78 +83,67 @@ export const Navbar: React.FC<NavbarProps> = ({
               </span>
             </div>
             <p className="text-[10px] text-slate-500 font-medium hidden xl:block">
-              Đồng hành mục tiêu học tập bền vững
+              Todo & Đồng hành học tập thông minh
             </p>
           </div>
         </div>
 
         {/* Desktop Navigation */}
-        {!isRolePage && <nav className="hidden xl:flex items-center gap-1 bg-slate-100 p-1 rounded-full border border-slate-200">
-          {navLinks.map((item) => {
-            const Icon = item.icon;
-            const isActive = currentRoute === item.route;
-            return (
-              <button
-                key={item.route}
-                onClick={() => handleNavigate(item.route)}
-                className={`flex items-center gap-2 px-4 py-1.5 text-sm font-medium rounded-full transition-all duration-200 cursor-pointer ${
-                  isActive
-                    ? 'bg-white text-sky-600 shadow-xs font-semibold'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
-                }`}
-              >
-                <Icon className={`w-4 h-4 ${isActive ? 'text-sky-600' : 'text-slate-500'}`} />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
-        </nav>}
+        {!isRolePage && (
+          <nav className="hidden xl:flex items-center gap-1 bg-slate-100 p-1 rounded-full border border-slate-200">
+            {navLinks.map((item) => {
+              const Icon = item.icon;
+              const isActive = currentRoute === item.route;
+              return (
+                <button
+                  key={item.route}
+                  onClick={() => handleNavigate(item.route)}
+                  className={`flex items-center gap-2 px-4 py-1.5 text-sm font-medium rounded-full transition-all duration-200 cursor-pointer ${
+                    isActive
+                      ? 'bg-white text-sky-600 shadow-xs font-semibold'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                  }`}
+                >
+                  <Icon className={`w-4 h-4 ${isActive ? 'text-sky-600' : 'text-slate-500'}`} />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+        )}
 
         {/* Right CTA / Auth controls */}
         <div className="hidden xl:flex items-center gap-3">
           {currentUser ? (
             <div className="flex items-center gap-2.5">
-              {/* If user is admin, allow quick inspection of other role views */}
               {currentUser.role === 'admin' && currentRoute !== 'admin' && (
                 <button
                   onClick={() => handleNavigate('admin')}
-                  className="px-3 py-1.5 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-200 cursor-pointer"
+                  className="px-3 py-1.5 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-200 hover:bg-slate-200 transition-colors cursor-pointer"
                 >
-                  Bảng quản trị
+                  Bảng Quản trị
                 </button>
               )}
 
               <div className="text-right pl-1">
-                <span className="text-xs font-bold text-slate-800 block truncate max-w-[150px]">
-                  {currentUser.email || 'Tài khoản Google'}
+                <span className="text-xs font-bold text-slate-800 block truncate max-w-[160px]">
+                  {currentUser.fullName || currentUser.email}
                 </span>
                 <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full inline-block ${
                   currentUser.role === 'admin'
                     ? 'bg-slate-200 text-slate-800'
-                    : currentUser.role === 'mentor'
-                    ? 'bg-emerald-100 text-emerald-800'
-                    : currentUser.role === 'researcher'
-                    ? 'bg-purple-100 text-purple-800'
-                    : 'bg-blue-100 text-blue-800'
+                    : 'bg-sky-100 text-sky-800'
                 }`}>
-                  {currentUser.role === 'mentor' && isLeadMentor
-                    ? 'GVHD Chính'
-                    : currentUser.role === 'mentor'
-                    ? 'GVHD Cố vấn'
-                    : currentUser.role === 'researcher'
-                    ? 'Nhà nghiên cứu'
-                    : currentUser.role === 'admin'
-                    ? 'Quản trị viên'
-                    : 'Học sinh'}
+                  {currentUser.role === 'admin' ? 'Quản trị viên' : 'Học sinh'}
                 </span>
               </div>
 
               {!isRolePage && (
                 <button
-                  onClick={() => handleNavigate(currentUser.role as AppRoute)}
+                  onClick={() => handleNavigate(currentUser.role === 'admin' ? 'admin' : 'student')}
                   className="px-4 py-2 text-xs font-bold text-white bg-sky-600 hover:bg-sky-700 rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
                 >
-                  <span>Bàn làm việc</span>
+                  <span>Hôm nay</span>
                   <ArrowRight className="w-3.5 h-3.5" />
                 </button>
               )}
@@ -184,14 +174,14 @@ export const Navbar: React.FC<NavbarProps> = ({
                 onClick={() => handleNavigate('login')}
                 className="px-5 py-2.5 text-sm font-semibold text-white bg-sky-600 hover:bg-sky-700 rounded-xl shadow-md shadow-sky-600/20 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center gap-1.5 cursor-pointer"
               >
-                <span>Vào không gian</span>
+                <span>Bắt đầu ngay</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             </>
           )}
         </div>
 
-        {/* Mobile menu hamburger button */}
+        {/* Mobile menu button */}
         <div className="flex xl:hidden items-center gap-2">
           {isRolePage ? (
             currentUser && (
@@ -242,10 +232,10 @@ export const Navbar: React.FC<NavbarProps> = ({
               {currentUser ? (
                 <>
                   <button
-                    onClick={() => handleNavigate(currentUser.role as AppRoute)}
+                    onClick={() => handleNavigate(currentUser.role === 'admin' ? 'admin' : 'student')}
                     className="w-full py-2.5 rounded-xl bg-sky-600 text-white font-semibold text-sm shadow-md hover:bg-sky-700 text-center cursor-pointer"
                   >
-                    Bàn làm việc
+                    Vào Hôm nay (Today)
                   </button>
                   <button
                     onClick={handleSignOut}
