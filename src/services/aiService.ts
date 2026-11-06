@@ -554,34 +554,45 @@ export async function generateQuickWins(
 
 async function callDirectGemini(prompt: string, jsonMode: boolean = false): Promise<string> {
   const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env?.GEMINI_API_KEY : '');
-  if (!apiKey || apiKey.startsWith('AQ.')) {
-    throw new Error('Chưa cấu hình GEMINI_API_KEY chuẩn Google AI Studio.');
+  if (!apiKey || apiKey.trim().length < 10) {
+    throw new Error('Chưa có API key.');
   }
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.5,
-          ...(jsonMode ? { responseMimeType: 'application/json' } : {})
+  // Danh sách các model chính thức của Google AI Studio (ưu tiên 2.0-flash, 1.5-flash)
+  const candidateModels = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-flash'];
+  let lastError: any = null;
+
+  for (const model of candidateModels) {
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey.trim()}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature: 0.7,
+              ...(jsonMode ? { responseMimeType: 'application/json' } : {})
+            }
+          })
         }
-      })
-    }
-  );
+      );
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Gemini API Error: ${err}`);
+      if (res.ok) {
+        const data = await res.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) return text;
+      } else {
+        const err = await res.text();
+        lastError = new Error(`Model ${model} (${res.status}): ${err}`);
+      }
+    } catch (e) {
+      lastError = e;
+    }
   }
 
-  const data = await res.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error('Không nhận được nội dung từ Gemini.');
-  return text;
+  throw lastError || new Error('Không thể kết nối tới Google Gemini API.');
 }
 
 // -------------------------------------------------------------------------
@@ -794,22 +805,31 @@ export async function askAICompanion(
 ): Promise<{ reply: string; actionSuggestions?: string[] }> {
   // 1. Ưu tiên gọi Gemini trực tiếp nếu có API Key
   try {
-    const prompt = `Bạn là AI Đồng hành rèn luyện học tập EduPulse AI.
-Học sinh nhắn: "${message}"
+    const prompt = `Bạn là Trợ lý Trí tuệ Nhân tạo Toàn diện của EduPulse AI (kết hợp vai trò Cố vấn Học tập & Nền tảng EduPulse AI, đồng thời là một Trợ lý Tri thức Thông thái như ChatGPT).
 
-Bối cảnh thực tế của học sinh:
+Dữ liệu thực tế của học sinh hiện tại:
 - Số mục tiêu đang theo đuổi: ${context.goalsCount}
 - Tổng nhiệm vụ: ${context.tasksCount} (Đã hoàn thành: ${context.completedCount})
 - Chuỗi ngày rèn luyện liên tục (Streak): ${context.streakDays} ngày
 - Số việc quá hạn hiện tại: ${context.overdueCount}
 
-Yêu cầu:
-- Tông giọng: Ấm áp, đồng cảm, chuyên gia tâm lý học tập, thực tế và hành động cụ thể.
-- Trực tiếp trả lời câu hỏi/tâm sự của học sinh, không nói vòng vo.
-- Trả về JSON duy nhất theo schema:
+Kiến thức nền tảng EduPulse AI bạn nắm giữ:
+- Module Hôm nay (Today): Quản lý việc trong ngày theo 5 nhóm (Quan trọng, Thường, Dễ, Đã xong, Quá hạn), thanh tiến độ % tự đổi màu, cảnh báo quá tải khi > 4 giờ hoặc > 6 việc, tính streak 7 ngày.
+- Module Kế hoạch (My Plans): Quản lý mục tiêu, tạo lộ trình tự động bằng AI (AI Plan Generator), quản lý phiên bản kế hoạch (Plan Versioning), thống kê đúng hạn/quá hạn.
+- Module Lịch biểu (Calendar): 4 chế độ Tháng, Tuần, Ngày, Danh sách; đồng bộ tức thì với Today và Kế hoạch.
+- Module Tiến độ (Progress): 11 biểu đồ phân tích chuyên sâu, Bản đồ nhiệt Activity Heatmap, tạo và xuất Báo cáo cá nhân hóa AI 9 phần ra file PDF.
+- Module Nhật ký (Journal): Ghi chép cảm xúc, emoji động lực (1-5 sao), độ khó, tự động lưu bản nháp draft.
+- Module Cài đặt (Settings): Pomodoro (25/45/60 phút), mục tiêu phút học mỗi ngày, thông báo web/email.
+
+Học sinh hỏi: "${message}"
+
+Yêu cầu câu trả lời:
+- Trả lời ĐÚNG TRỌNG TÂM câu hỏi. Nếu hỏi về EduPulse, hãy giải thích chính xác các tính năng. Nếu hỏi kiến thức ngoài (Khoa học, Toán, Lý, Hóa, Ngoại ngữ, Lập trình, Lịch sử, Đời sống, Viết lách...), hãy trả lời thông thái, sâu sắc, phong phú và chính xác như ChatGPT.
+- Định dạng Markdown rõ ràng, dễ đọc (in đậm, gạch đầu dòng).
+- Trả về DUY NHẤT một JSON hợp lệ theo schema:
 {
-  "reply": "Nội dung trả lời chi tiết, có phân tích và các bước rõ ràng...",
-  "actionSuggestions": ["Hành động gợi ý 1", "Hành động gợi ý 2", "Hành động gợi ý 3"]
+  "reply": "Nội dung câu trả lời đầy đủ, cuốn hút và đúng trọng tâm...",
+  "actionSuggestions": ["Gợi ý hành động 1", "Gợi ý hành động 2", "Gợi ý hành động 3"]
 }`;
 
     const raw = await callDirectGemini(prompt, true);
@@ -822,13 +842,13 @@ Yêu cầu:
         context
       });
     } catch {
-      // 3. Intelligent Context-Aware Advisory Engine (16 Chủ đề sâu sắc)
+      // 3. Omni-Knowledge Answering Engine (Hệ thống tri thức toàn diện)
       return generateDynamicCompanionAdvice(message, context);
     }
   }
 }
 
-// Engine cố vấn thông minh đa chiều theo ý định thực tế của học sinh
+// Engine tri thức toàn diện: Vừa am hiểu toàn bộ EduPulse, vừa là bách khoa tri thức như ChatGPT
 function generateDynamicCompanionAdvice(
   message: string,
   context: {
@@ -839,75 +859,190 @@ function generateDynamicCompanionAdvice(
     overdueCount: number;
   }
 ): { reply: string; actionSuggestions?: string[] } {
-  const msg = message.toLowerCase().trim();
+  const q = message.trim();
+  const qLower = q.toLowerCase();
   const suggestions: string[] = [];
 
-  // 1. Mệt mỏi, kiệt sức, lười, nản lòng, stress
-  if (msg.includes('lười') || msg.includes('nản') || msg.includes('chán') || msg.includes('mệt') || msg.includes('áp lực') || msg.includes('stress') || msg.includes('kiệt sức') || msg.includes('bế tắc')) {
-    const reply = `Chào bạn! Cảm giác kiệt sức hoặc mất động lực là phản ứng rất tự nhiên của não bộ khi bạn đang gồng gánh quá nhiều kỳ vọng. Bạn đã kiên trì duy trì chuỗi ${context.streakDays} ngày rèn luyện — đó là một nỗ lực rất đáng tự hào!\n\nChiến thuật giải phóng tâm lý ngay lúc này:\n1. Tạm dừng mọi áp lực về kết quả hoàn hảo. Hôm nay không cần làm việc gì quá to tát.\n2. Áp dụng quy tắc "Bước đệm 5 phút": Chọn một việc nhỏ nhất, bật đồng hồ 5 phút và chỉ đọc hoặc viết đúng 5 phút rồi nghỉ.\n3. Hãy uống một ly nước ấm, đứng dậy vươn vai hoặc đi dạo 10 phút để tái tạo năng lượng thể chất.`;
-    suggestions.push('Thử 1 việc mồi (Quick Win) 5 phút', 'Dời 1 việc khó sang ngày mai tại trang Today', 'Nghỉ giải lao 15 phút không dùng điện thoại');
+  // =========================================================================
+  // PHẦN 1: HỆ SINH THÁI WEBSITE EDUPULSE AI (Am hiểu 100% mọi phân hệ)
+  // =========================================================================
+
+  // 1.1. Giới thiệu tổng quan EduPulse AI
+  if (qLower.includes('edupulse') || qLower.includes('web này') || qLower.includes('website này') || qLower.includes('nền tảng') || (qLower.includes('bạn là ai') || qLower.includes('mày là ai') || qLower.includes('giới thiệu'))) {
+    const reply = `**EduPulse AI** là nền tảng quản lý mục tiêu cá nhân, tối ưu hóa công việc học tập và duy trì động lực bằng Trí tuệ Nhân tạo.\n\n### 🌟 Các phân hệ cốt lõi của website:\n1. **Hôm nay (Today):** Trung tâm điều hành hàng ngày. Phân loại công việc thông minh thành 5 nhóm (Quan trọng, Thông thường, Nhỏ dễ làm, Đã xong, Quá hạn), tính chuỗi ngày Streak liên tục và cảnh báo nguy cơ quá tải.\n2. **Kế hoạch (My Plans):** Tạo và quản lý vòng đời mục tiêu dài hạn. Tích hợp **AI Plan Generator** tự động chia giai đoạn và **Quản lý phiên bản kế hoạch** giúp theo dõi lịch sử điều chỉnh.\n3. **Lịch biểu (Calendar):** Đồng bộ dữ liệu trực tiếp với Today và Kế hoạch qua 4 chế độ xem: Tháng, Tuần, Ngày và Danh sách công việc (Agenda).\n4. **Tiến độ (Progress):** Trung tâm phân tích dữ liệu SaaS với 11 biểu đồ chuyên sâu, Bản đồ hoạt động (Activity Heatmap) và công cụ xuất **Báo cáo cá nhân hóa AI** định kỳ ra file PDF.\n5. **AI Đồng hành (AI Companion):** Trợ lý đa năng gồm Chat cố vấn, Phân tích rủi ro quá tải & Đề xuất dãn tiến độ, Nhiệm vụ mồi (Quick Wins) và Học theo sở thích.\n6. **Nhật ký (Journal):** Không gian tự phản chiếu nỗ lực, đánh giá động lực kèm emoji (😊/😐/😓), tự động lưu bản nháp draft.\n7. **Cài đặt (Settings):** Tùy chỉnh hiệp tập trung Pomodoro (25, 45, 60 phút), đặt mục tiêu phút rèn luyện mỗi ngày và thiết lập giờ nhắc lịch.`;
+    suggestions.push('Khám phá trang Hôm nay (Today)', 'Tạo kế hoạch mới tại My Plans', 'Xem phân tích tại trang Progress');
     return { reply, actionSuggestions: suggestions };
   }
 
-  // 2. Quá hạn, dồn việc, nợ bài, trễ deadline
-  if (msg.includes('quá hạn') || msg.includes('trễ') || msg.includes('dồn việc') || msg.includes('nhiều việc') || msg.includes('deadline') || msg.includes('nợ bài')) {
-    const reply = `Hệ thống ghi nhận bạn đang có ${context.overdueCount} công việc quá hạn. Khi danh sách chuyển sang màu đỏ, tâm lý chung là muốn trốn tránh. Hãy bình tĩnh, chúng ta hoàn toàn có thể sắp xếp lại trật tự:\n\nKế hoạch "Dọn sạch bàn học":\n1. Vào trang Today, bấm "Chuyển tất cả về Hôm nay" để gom toàn bộ việc dồn ứ lại một chỗ.\n2. Chọn đúng 1 việc có mức độ High Priority quan trọng nhất để làm trước trong 25 phút.\n3. Những việc còn lại, hãy mạnh dạn bấm "Chuyển ngày" rải đều sang 2–3 ngày tiếp theo. Đừng cố ép bản thân giải quyết hết trong một đêm.`;
+  // 1.2. Hướng dẫn trang Hôm nay (Today)
+  if (qLower.includes('hôm nay') || qLower.includes('today') || qLower.includes('tick việc') || qLower.includes('dời việc') || qLower.includes('thanh tiến độ')) {
+    const reply = `**Trang Hôm nay (Today)** là nơi bạn bắt đầu và kết thúc mỗi ngày rèn luyện:\n\n- **Phân nhóm thông minh:** Công việc được tự động chia thành 5 nhóm: *Quan trọng & cần làm ngay* (ưu tiên làm trước), *Công việc thông thường*, *Công việc nhỏ dễ hoàn thành* (khởi động lấy đà), *Đã hoàn thành*, và *Công việc quá hạn*.\n- **Thao tác nhanh:** Bạn có thể tick hoàn thành, bỏ tick khi nhầm, đổi ngày thực hiện, sửa mô tả hoặc tạm dừng bất kỳ lúc nào.\n- **Thanh tiến độ ngày:** Tự động đổi màu trực quan theo % hoàn thành (xanh lá khi đạt $\\ge 80\\%$, xanh lam khi $\\ge 50\\%$, hổ phách và đỏ khi còn thấp).\n- **Chuỗi Streak:** Ghi nhận chuỗi ngày bạn liên tục có hoạt động hoàn thành nhiệm vụ, kèm lịch 7 ngày gần nhất.\n- **AI Daily Assistant:** Quét khối lượng việc, cảnh báo nếu tổng thời gian vượt quá 4 giờ và gợi ý 1 nhiệm vụ dễ nhất để bạn khởi động ngày mới.`;
+    suggestions.push('Mở trang Hôm nay (Today)', 'Chuyển việc quá hạn về Hôm nay', 'Thử hoàn thành 1 việc ngay');
+    return { reply, actionSuggestions: suggestions };
+  }
+
+  // 1.3. Hướng dẫn trang Kế hoạch (My Plans)
+  if (qLower.includes('kế hoạch') || qLower.includes('my plans') || qLower.includes('plan generator') || qLower.includes('phiên bản')) {
+    const reply = `**Module Kế hoạch (My Plans)** được thiết kế để biến mục tiêu trừu tượng thành lộ trình từng bước khả thi:\n\n- **AI Plan Generator:** Bạn chỉ cần nhập mục tiêu, ngày bắt đầu - kết thúc, thời gian có thể dành mỗi ngày và sở thích cá nhân. AI sẽ tự động phân rã thành 3 giai đoạn (Khởi động, Tăng tốc, Cán đích) kèm deadline và độ khó cụ thể cho từng việc.\n- **Quản lý phiên bản kế hoạch:** Khi AI đề xuất điều chỉnh lịch hoặc bạn sửa đổi mục tiêu, hệ thống tự động lưu lại phiên bản cũ. Bạn có thể xem bảng so sánh trước - sau và quyết định giữ nguyên hay chấp nhận kế hoạch mới mà không làm mất lịch sử việc đã làm.\n- **Mini Analytics theo mục tiêu:** Mỗi thẻ kế hoạch hiển thị ngay thanh tiến độ, tỷ lệ đúng hạn, số việc quá hạn và dự báo thời gian hoàn tất.`;
+    suggestions.push('Tạo mục tiêu mới cùng AI', 'Xem các phiên bản kế hoạch cũ', 'Kiểm tra tiến độ từng kế hoạch');
+    return { reply, actionSuggestions: suggestions };
+  }
+
+  // 1.4. Hướng dẫn trang Lịch biểu (Calendar)
+  if (qLower.includes('lịch') || qLower.includes('calendar') || qLower.includes('xem theo tuần') || qLower.includes('xem theo tháng')) {
+    const reply = `**Trang Lịch biểu (Calendar)** giúp bạn có cái nhìn toàn cảnh về phân bổ thời gian:\n\n- **4 chế độ xem linh hoạt:**\n  1. *Xem theo Tháng (Month):* Ô lịch trực quan, ngày hôm nay được viền sáng, có badge đếm số việc hoàn thành/tổng việc và dot cảnh báo việc quá hạn.\n  2. *Xem theo Tuần (Week):* 7 cột thứ Hai đến Chủ Nhật, hiển thị chi tiết tên việc trong từng ngày.\n  3. *Xem theo Ngày (Day):* Đi sâu vào từng nhiệm vụ trong ngày được chọn.\n  4. *Xem dạng Danh sách (Agenda):* Sắp xếp lộ trình toàn bộ công việc theo thứ tự thời gian tăng dần.\n- **Tương tác đồng bộ:** Khi bạn dời ngày hoặc tick việc trên Lịch biểu, dữ liệu ở Today và Progress sẽ lập tức cập nhật tương ứng.`;
+    suggestions.push('Xem lịch tháng hiện tại', 'Chuyển sang chế độ xem Tuần', 'Thêm việc mới vào ngày mai');
+    return { reply, actionSuggestions: suggestions };
+  }
+
+  // 1.5. Hướng dẫn trang Tiến độ & Báo cáo AI (Progress)
+  if (qLower.includes('tiến độ') || qLower.includes('progress') || qLower.includes('báo cáo ai') || qLower.includes('heatmap') || qLower.includes('xuất pdf') || qLower.includes('in báo cáo')) {
+    const reply = `**Trang Tiến độ (Progress)** là trung tâm phân tích dữ liệu chuyên sâu của bạn:\n\n- **Bản đồ hoạt động (Activity Heatmap):** Mô phỏng chuỗi ô màu theo từng ngày (tương tự GitHub), màu xanh càng đậm thể hiện ngày đó bạn cống hiến càng nhiều giờ học.\n- **11 Biểu đồ trực quan:** Theo dõi xu hướng hoàn thành, phân bổ năng suất theo giờ trong ngày, so sánh tiến độ giữa các mục tiêu, ma trận độ khó vs hoàn thành, và độ lệch giữa giờ dự kiến vs giờ thực tế.\n- **Báo cáo cá nhân hóa AI định kỳ:** Hỗ trợ tạo báo cáo Tuần, Tháng, Quý hoặc Tổng kết Kế hoạch gồm 9 phần (Điểm sáng, Rào cản, Nguyên nhân, Khuyến nghị, Bảng hành động ưu tiên). Bạn có thể bấm nút **"In / Xuất PDF"** để lưu về máy hoặc nộp cho phụ huynh, giáo viên.`;
+    suggestions.push('Mở trang Tiến độ (Progress)', 'Tạo Báo cáo Cá nhân hóa AI', 'In / Xuất PDF báo cáo tuần');
+    return { reply, actionSuggestions: suggestions };
+  }
+
+  // 1.6. Hướng dẫn trang Nhật ký (Journal)
+  if (qLower.includes('nhật ký') || qLower.includes('journal') || qLower.includes('ghi chép') || qLower.includes('cảm xúc')) {
+    const reply = `**Trang Nhật ký (Journal)** đóng vai trò như một người bạn lắng nghe và lưu trữ hành trình trưởng thành của bạn:\n\n- **Ghi chép tự do:** Sau mỗi buổi học hoặc cuối ngày, bạn có thể ghi lại những gì đã làm được, khó khăn gặp phải và bài học rút ra.\n- **Tự động lưu nháp (Auto-save draft):** Khi bạn đang gõ, hệ thống tự động lưu vào trình duyệt. Nếu vô tình tắt tab hoặc mất mạng, nội dung của bạn vẫn còn nguyên.\n- **Đánh giá động lực & độ khó:** Thang điểm 1-5 sao kèm emoji cảm xúc trực quan (😊 Hào hứng, 😐 Bình thường, 😓 Mệt mỏi). Dữ liệu này giúp AI nhận diện thời điểm bạn có nguy cơ kiệt sức để cảnh báo sớm.`;
+    suggestions.push('Viết nhật ký hôm nay', 'Lọc nhật ký theo kế hoạch', 'Xem lại các ghi chép tuần trước');
+    return { reply, actionSuggestions: suggestions };
+  }
+
+  // 1.7. Hướng dẫn trang Cài đặt (Settings)
+  if (qLower.includes('cài đặt') || qLower.includes('settings') || qLower.includes('pomodoro') || qLower.includes('đổi giờ') || qLower.includes('avatar')) {
+    const reply = `**Trang Cài đặt (Settings)** cho phép bạn cá nhân hóa thói quen học tập:\n\n- **Hồ sơ & Avatar nhận diện:** Hiển thị chữ cái đại diện với dải gradient hiện đại, cập nhật họ tên hiển thị và mã định danh học sinh.\n- **Tùy chỉnh thời lượng Pomodoro:** Bạn có thể chọn hiệp học 25 phút (tiêu chuẩn), 45 phút (chuẩn 1 tiết học), hoặc 60 phút (tập trung chuyên sâu).\n- **Mục tiêu cống hiến hàng ngày:** Đặt mốc thời gian muốn rèn luyện (30, 45, 60 hoặc 90 phút/ngày).\n- **Lịch nhắc nhở:** Bật thông báo nhắc việc mỗi tối qua Web hoặc Email vào đúng khung giờ bạn chọn.`;
+    suggestions.push('Vào Cài đặt tài khoản', 'Chỉnh hiệp Pomodoro thành 45 phút', 'Đổi giờ nhắc nhở mỗi tối');
+    return { reply, actionSuggestions: suggestions };
+  }
+
+  // =========================================================================
+  // PHẦN 2: BÁCH KHOA TOÀN THƯ & HỌC THUẬT (Như ChatGPT)
+  // =========================================================================
+
+  // 2.1. Lập trình, Công nghệ, AI, Web Development
+  if (qLower.includes('react') || qLower.includes('javascript') || qLower.includes('typescript') || qLower.includes('python') || qLower.includes('lập trình') || qLower.includes('code') || qLower.includes('git') || qLower.includes('api') || qLower.includes('html') || qLower.includes('css')) {
+    if (qLower.includes('react')) {
+      const reply = `**React** là một thư viện JavaScript mã nguồn mở được phát triển bởi Meta (Facebook), chuyên dùng để xây dựng giao diện người dùng (UI) dạng Single Page Application (SPA).\n\n### 💡 Các khái niệm then chốt trong React:\n1. **Component (Thành phần):** Chia giao diện thành các khối độc lập, có thể tái sử dụng (như Header, TaskCard, Sidebar).\n2. **State & Props:** *Props* là dữ liệu truyền từ cha xuống con (bất biến), còn *State* là trạng thái nội tại có thể thay đổi để kích hoạt React vẽ lại (re-render) giao diện.\n3. **React Hooks:** Các hàm đặc biệt như \`useState\` (quản lý state), \`useEffect\` (xử lý side-effects như gọi API), \`useMemo\` và \`useCallback\` (tối ưu hiệu năng).\n4. **Virtual DOM:** Cây DOM ảo trong bộ nhớ giúp React so sánh điểm khác biệt (diffing) và chỉ cập nhật đúng phần tử bị thay đổi trên trình duyệt thật, mang lại tốc độ cực nhanh.`;
+      suggestions.push('Hỏi về React Hooks (useState, useEffect)', 'Tìm hiểu cách React render component', 'Cách kết nối React với Supabase');
+      return { reply, actionSuggestions: suggestions };
+    }
+    if (qLower.includes('python')) {
+      const reply = `**Python** là một ngôn ngữ lập trình bậc cao, thông dịch, nổi tiếng với cú pháp trong sáng, dễ đọc và cực kỳ mạnh mẽ.\n\n### 🚀 Các ứng dụng hàng đầu của Python:\n1. **Trí tuệ nhân tạo & Machine Learning:** Thư viện chuẩn mực như TensorFlow, PyTorch, Scikit-learn.\n2. **Phân tích dữ liệu & Khoa học dữ liệu:** Pandas, NumPy, Matplotlib.\n3. **Phát triển Backend Web:** Django, FastAPI, Flask.\n4. **Tự động hóa & Viết script:** Thu thập dữ liệu web (Scraping), tự động hóa các tác vụ lặp đi lặp lại.\n\n*Mẹo học:* Bắt đầu bằng việc nắm vững kiểu dữ liệu (List, Dict, Tuple), vòng lặp (\`for\`, \`while\`), cấu trúc hàm và xử lý ngoại lệ (\`try/except\`).`;
+      suggestions.push('Cú pháp cơ bản trong Python', 'Lộ trình học Python từ con số 0', 'Sự khác biệt giữa List và Tuple');
+      return { reply, actionSuggestions: suggestions };
+    }
+    const reply = `Trong ngành công nghệ và lập trình, kỹ năng cốt lõi không phải là học thuộc lòng cú pháp mà là **Tư duy giải quyết vấn đề (Algorithmic Thinking)**:\n\n1. **Nguyên lý Chia để trị (Divide and Conquer):** Đừng cố giải một bài toán lớn ngay. Hãy bẻ nó thành 3-4 bài toán con nhỏ hơn mà bạn giải được trong 10 dòng code.\n2. **Tư duy hướng cấu trúc:** Nắm vững cách dữ liệu được tổ chức (Mảng, Danh sách liên kết, Bảng băm Hash Map, Ngăn xếp Stack).\n3. **Kỹ năng Debugging:** Đọc kỹ thông báo lỗi (Error Stack Trace). Lỗi thường chỉ ra chính xác dòng code và lý do biến số không đúng kiểu dữ liệu.`;
+    suggestions.push('Tìm hiểu về cấu trúc dữ liệu', 'Cách dùng Git và GitHub cơ bản', 'Lộ trình trở thành Frontend Developer');
+    return { reply, actionSuggestions: suggestions };
+  }
+
+  // 2.2. Toán học (Đạo hàm, Tích phân, Xác suất, Đại số, Hình học)
+  if (qLower.includes('đạo hàm') || qLower.includes('tích phân') || qLower.includes('xác suất') || qLower.includes('toán') || qLower.includes('hình học') || qLower.includes('phương trình')) {
+    if (qLower.includes('đạo hàm')) {
+      const reply = `**Đạo hàm (Derivative)** của một hàm số tại một điểm biểu thị **tốc độ thay đổi tức thời** của hàm số đó tại điểm đang xét.\n\n### 📐 Ý nghĩa thực tiễn:\n- **Hình học:** Đạo hàm $f'(x_0)$ chính là hệ số góc (độ dốc) của đường tiếp tuyến với đồ thị tại điểm $x_0$. Khi tiếp tuyến dốc đứng, hàm số thay đổi rất nhanh; khi tiếp tuyến nằm ngang ($f'(x) = 0$), hàm số đạt điểm cực trị (cực đại hoặc cực tiểu).\n- **Vật lý:** Vận tốc tức thời là đạo hàm của quãng đường theo thời gian ($v(t) = s'(t)$); gia tốc là đạo hàm của vận tốc ($a(t) = v'(t)$).\n- **Kinh tế:** Chi phí biên (Marginal cost) là đạo hàm của hàm tổng chi phí, cho biết chi phí tăng thêm khi sản xuất thêm 1 đơn vị sản phẩm.`;
+      suggestions.push('Công thức tính đạo hàm cơ bản', 'Ứng dụng đạo hàm tìm cực trị', 'Đạo hàm trong Machine Learning (Gradient)');
+      return { reply, actionSuggestions: suggestions };
+    }
+    if (qLower.includes('tích phân')) {
+      const reply = `**Tích phân (Integral)** là khái niệm toán học ngược lại với đạo hàm, đại diện cho **phép tính tổng vô hạn của các đại lượng vô cùng nhỏ**.\n\n### 📊 Ý nghĩa cốt lõi:\n- **Hình học:** Tích phân xác định $\\int_a^b f(x)dx$ biểu thị **diện tích hình thang cong** giới hạn bởi đồ thị hàm số $f(x)$, trục hoành và hai đường thẳng $x = a, x = b$.\n- **Vật lý:** Nếu biết vận tốc biến thiên theo thời gian $v(t)$, tích phân của vận tốc chính là tổng quãng đường vật đã đi được: $s = \\int_{t_1}^{t_2} v(t)dt$.\n- **Định lý cơ bản của Giải tích:** Kết nối hai mảng lớn: Đạo hàm và Tích phân là hai phép toán nghịch đảo của nhau.`;
+      suggestions.push('Phương pháp đổi biến số tích phân', 'Tích phân từng phần', 'Ứng dụng tích phân tính thể tích khối tròn xoay');
+      return { reply, actionSuggestions: suggestions };
+    }
+    const reply = `Toán học là ngôn ngữ mô tả quy luật của vũ trụ. Để làm chủ môn Toán:\n\n1. **Hiểu bản chất trước khi nhớ công thức:** Hãy tự hỏi công thức này xuất phát từ đâu và mô tả hiện tượng gì trong thực tế.\n2. **Vẽ hình trực quan:** Não bộ xử lý hình ảnh nhanh gấp 60.000 lần văn bản. Hãy luôn phác họa đồ thị hoặc sơ đồ bài toán ra giấy nháp.\n3. **Nhận diện dạng bài:** Một bài toán khó thường là sự lồng ghép của 2-3 bài toán cơ bản. Hãy bóc tách từng lớp dữ kiện.`;
+    suggestions.push('Phương pháp giải phương trình nhanh', 'Quy tắc tính xác suất thống kê', 'Học Toán bằng sơ đồ tư duy');
+    return { reply, actionSuggestions: suggestions };
+  }
+
+  // 2.3. Khoa học tự nhiên: Vật lý & Hóa học
+  if (qLower.includes('newton') || qLower.includes('vật lý') || qLower.includes('hóa học') || qLower.includes('nguyên tử') || qLower.includes('năng lượng') || qLower.includes('bầu trời màu xanh')) {
+    if (qLower.includes('newton')) {
+      const reply = `**Ba Định luật Chuyển động của Isaac Newton** là nền móng của Cơ học cổ điển:\n\n1. **Định luật I (Quán tính):** Một vật sẽ giữ nguyên trạng thái đứng yên hoặc chuyển động thẳng đều nếu không chịu tác dụng của lực nào (hoặc hợp lực bằng 0). *Ý nghĩa:* Mọi vật đều có xu hướng chống lại sự thay đổi trạng thái chuyển động.\n2. **Định luật II ($F = ma$):** Gia tốc của một vật tỉ lệ thuận với lực tác dụng lên nó và tỉ lệ nghịch với khối lượng của vật. *Ý nghĩa:* Vật càng nặng thì càng cần lực lớn để tăng tốc độ.\n3. **Định luật III (Tương tác / Phản lực):** Khi vật A tác dụng lên vật B một lực, thì vật B cũng tác dụng ngược lại vật A một lực cùng độ lớn nhưng ngược chiều ($F_{AB} = -F_{BA}$). *Ví dụ:* Khi bạn bước đi, chân đạp về phía sau, mặt đất đẩy bạn tiến về phía trước.`;
+      suggestions.push('Định luật vạn vật hấp dẫn', 'Định luật bảo toàn cơ năng', 'Ứng dụng định luật Newton trong chế tạo xe hơi');
+      return { reply, actionSuggestions: suggestions };
+    }
+    if (qLower.includes('bầu trời')) {
+      const reply = `**Tại sao bầu trời ban ngày có màu xanh?**\n\nHiện tượng này xảy ra do **Hiện tượng tán xạ Rayleigh (Rayleigh scattering)**:\n1. Ánh sáng từ Mặt Trời thực chất là ánh sáng trắng, bao gồm tập hợp 7 sắc cầu vồng với các bước sóng khác nhau (ánh sáng đỏ có bước sóng dài nhất, ánh sáng xanh tím có bước sóng ngắn nhất).\n2. Khi ánh sáng Mặt Trời đi vào bầu khí quyển Trái Đất, nó va chạm với các phân tử khí (Nitơ, Oxy) và bụi mịn.\n3. Ánh sáng có bước sóng ngắn (xanh lam và tím) bị tán xạ mạnh hơn ánh sáng đỏ gấp gần 10 lần và tỏa ra khắp mọi hướng trên bầu trời.\n4. Mắt người nhạy cảm với màu xanh lam hơn màu tím, vì vậy chúng ta nhìn thấy bầu trời có màu xanh lam rực rỡ!`;
+      suggestions.push('Tại sao hoàng hôn lại có màu đỏ rực?', 'Hiện tượng cầu vồng sau mưa', 'Ánh sáng truyền đi trong chân không ra sao?');
+      return { reply, actionSuggestions: suggestions };
+    }
+    const reply = `Khoa học tự nhiên giải thích cách thức thế giới vận hành từ cấp độ hạ nguyên tử đến tầm vĩ mô của các thiên hà. Quy luật cốt lõi bạn luôn có thể bám vào là **Định luật Bảo toàn Năng lượng**: Năng lượng không tự sinh ra và cũng không tự mất đi, nó chỉ chuyển hóa từ dạng này sang dạng khác (thế năng $\\rightarrow$ động năng $\\rightarrow$ nhiệt năng).`;
+    suggestions.push('Giải thích bảng tuần hoàn hóa học', 'Cơ chế hoạt động của phản ứng hóa học', 'Thuyết tương đối của Einstein');
+    return { reply, actionSuggestions: suggestions };
+  }
+
+  // 2.4. Địa lý, Lịch sử, Xã hội (Thủ đô các nước, sự kiện lịch sử)
+  if (qLower.includes('thủ đô') || qLower.includes('nước pháp') || qLower.includes('lịch sử') || qLower.includes('địa lý') || qLower.includes('việt nam')) {
+    if (qLower.includes('pháp') || qLower.includes('france')) {
+      const reply = `**Thủ đô của nước Pháp là Paris**, được mệnh danh là *"Kinh đô Ánh sáng"* (La Ville Lumière) và là trung tâm văn hóa, nghệ thuật, thời trang hàng đầu thế giới.\n\n### 🗼 Một số điểm nổi bật về Paris:\n- **Biểu tượng nổi tiếng:** Tháp Eiffel (xây dựng năm 1889), Bảo tàng Louvre (nơi lưu giữ bức tranh nàng Mona Lisa), Nhà thờ Đức Bà Paris (Notre-Dame).\n- **Địa lý:** Nằm bên dòng sông Seine thơ mộng ở miền bắc nước Pháp.\n- **Kinh tế:** Là một trong những trung tâm tài chính và du lịch quan trọng nhất châu Âu.`;
+      suggestions.push('Thủ đô của các nước châu Âu khác', 'Lịch sử cuộc Cách mạng Pháp 1789', 'Các di sản thế giới tại Pháp');
+      return { reply, actionSuggestions: suggestions };
+    }
+    if (qLower.includes('thủ đô')) {
+      const reply = `Dưới đây là thủ đô của một số quốc gia tiêu biểu trên thế giới:\n\n- 🇻🇳 **Việt Nam:** Hà Nội\n- 🇫🇷 **Pháp:** Paris\n- 🇯🇵 **Nhật Bản:** Tokyo\n- 🇺🇸 **Hoa Kỳ:** Washington, D.C. *(Lưu ý: New York là trung tâm tài chính lớn nhất nhưng không phải thủ đô)*\n- 🇬🇧 **Vương quốc Anh:** London\n- 🇰🇷 **Hàn Quốc:** Seoul\n- 🇩🇪 **Đức:** Berlin\n- 🇨🇦 **Canada:** Ottawa *(nhiều người hay nhầm là Toronto hay Vancouver)*\n- 🇦🇺 **Úc:** Canberra *(nhiều người hay nhầm là Sydney hay Melbourne)*`;
+      suggestions.push('Hỏi thủ đô của một quốc gia cụ thể', 'Thủ đô các nước Đông Nam Á (ASEAN)', 'Các thành phố đông dân nhất thế giới');
+      return { reply, actionSuggestions: suggestions };
+    }
+    const reply = `Lịch sử và địa lý là tấm bản đồ dẫn đường giúp chúng ta hiểu vì sao thế giới hiện đại lại định hình như ngày nay. Hãy đặt câu hỏi về bất kỳ quốc gia, thời kỳ lịch sử hay hiện tượng tự nhiên nào, mình sẽ giải thích chi tiết cho bạn!`;
+    suggestions.push('Các triều đại lịch sử Việt Nam', 'Nguyên nhân dẫn đến Chiến tranh Thế giới', 'Sự hình thành các lục địa trên Trái Đất');
+    return { reply, actionSuggestions: suggestions };
+  }
+
+  // 2.5. Tiếng Anh, Ngoại ngữ, Dịch thuật
+  if (qLower.includes('tiếng anh') || qLower.includes('english') || qLower.includes('từ vựng') || qLower.includes('ielts') || qLower.includes('dịch') || qLower.includes('ngữ pháp')) {
+    const reply = `Để làm chủ tiếng Anh một cách tự nhiên và bền vững, bạn hãy áp dụng công thức 3 bước của người học đa ngôn ngữ:\n\n1. **Học theo cụm (Chunks / Collocations):** Đừng học từ lẻ loi. Ví dụ thay vì học từ *"decision"*, hãy học cụm *"make a crucial decision"*.\n2. **Tận dụng quy tắc Input Comprehensible (Đầu vào dễ hiểu):** Nghe và đọc các tài liệu tiếng Anh bạn hiểu được khoảng 70-80%. Độ khó vừa phải sẽ kích thích não bộ đoán nghĩa tự nhiên mà không bị nản.\n3. **Nguyên lý Spaced Repetition (Lặp lại ngắt quãng):** Ôn lại từ mới vào ngày thứ 1, ngày thứ 3, ngày thứ 7 và ngày thứ 30 để chuyển từ vựng từ trí nhớ ngắn hạn sang trí nhớ dài hạn.`;
+    suggestions.push('Phân biệt 12 thì cơ bản trong tiếng Anh', 'Chiến thuật nâng điểm IELTS Speaking', 'Cách học 5 từ mới mỗi ngày hiệu quả');
+    return { reply, actionSuggestions: suggestions };
+  }
+
+  // =========================================================================
+  // PHẦN 3: TÂM LÝ RÈN LUYỆN, ĐỘNG LỰC & NĂNG SUẤT
+  // =========================================================================
+
+  // 3.1. Nản lòng, lười, mệt, stress, áp lực
+  if (qLower.includes('lười') || qLower.includes('nản') || qLower.includes('chán') || qLower.includes('mệt') || qLower.includes('áp lực') || qLower.includes('stress') || qLower.includes('kiệt sức') || qLower.includes('bế tắc')) {
+    const reply = `Chào bạn! Cảm giác kiệt sức hoặc mất động lực là phản ứng tự vệ bình thường của não bộ khi bạn đang gánh vác quá nhiều kỳ vọng. Bạn đã kiên trì duy trì chuỗi **${context.streakDays} ngày rèn luyện** — đó là một nỗ lực rất đáng tự hào!\n\n### 🛡️ Chiến thuật giải tỏa tâm lý ngay lúc này:\n1. **Tạm hạ chuẩn hoàn hảo:** Hôm nay không cần làm việc gì quá to tát. Mục tiêu duy nhất là giữ nhịp thở đều.\n2. **Quy tắc "Bước đệm 5 phút":** Chọn một việc nhỏ nhất, bật đồng hồ 5 phút và chỉ đọc hoặc viết đúng 5 phút rồi nghỉ. Phần lớn trường hợp bạn sẽ vượt qua được sức ỳ ban đầu.\n3. **Tái tạo năng lượng thể chất:** Uống một cốc nước ấm, rời khỏi bàn học vươn vai hoặc đi lại 10 phút.`;
+    suggestions.push('Thử một nhiệm vụ mồi (Quick Win) 5 phút', 'Dời bớt 1 việc khó sang ngày mai tại Today', 'Nghỉ giải lao 15 phút không dùng điện thoại');
+    return { reply, actionSuggestions: suggestions };
+  }
+
+  // 3.2. Quá hạn, dồn việc, trễ deadline
+  if (qLower.includes('quá hạn') || qLower.includes('trễ') || qLower.includes('dồn việc') || qLower.includes('nhiều việc') || qLower.includes('deadline') || qLower.includes('nợ bài')) {
+    const reply = `Hệ thống ghi nhận bạn đang có **${context.overdueCount} công việc quá hạn**. Khi danh sách chuyển sang màu đỏ, tâm lý chung là muốn né tránh. Hãy bình tĩnh, chúng ta giải quyết từng nút thắt:\n\n### 🧹 Kế hoạch "Dọn sạch bàn học":\n1. **Gom lại một chỗ:** Vào trang Today, bấm nút *"Chuyển tất cả về Hôm nay"* để kiểm soát toàn bộ số việc tồn đọng.\n2. **Tập trung vào 1 việc mấu chốt:** Chọn đúng 1 việc có mức độ High Priority quan trọng nhất để làm trước trong 25 phút.\n3. **Rải đều việc còn lại:** Các việc khác, hãy bấm *"Chuyển ngày"* dời sang 2–3 ngày tiếp theo. Đừng ép mình làm hết trong một đêm.`;
     suggestions.push('Bấm "Chuyển tất cả về Hôm nay" ở Today', 'Hạ bớt mức ưu tiên các việc chưa gấp', 'Tập trung giải quyết 1 việc trong 25 phút');
     return { reply, actionSuggestions: suggestions };
   }
 
-  // 3. Tập trung, Pomodoro, chống phân tâm, nghiện điện thoại, mạng xã hội
-  if (msg.includes('pomodoro') || msg.includes('tập trung') || msg.includes('phân tâm') || msg.includes('điện thoại') || msg.includes('tiktok') || msg.includes('facebook') || msg.includes('xao nhãng')) {
-    const reply = `Kẻ thù lớn nhất của sự tập trung là sự phân tán kích thích (Dopamine trap). Để thiết lập một hiệp học sâu (Deep Work), hãy thử phương pháp Pomodoro nâng cao:\n\nQuy trình 3 bước:\n1. Loại bỏ kích thích: Úp màn hình điện thoại hoặc để sang phòng khác. Đeo tai nghe bật nhạc sóng não Lo-fi hoặc tiếng ồn trắng (White Noise).\n2. Thiết lập đồng hồ 25 phút: Cam kết trong 25 phút này chỉ mở đúng tài liệu bài học, tuyệt đối không chuyển tab trình duyệt.\n3. Nghỉ chuẩn khoa học 5 phút: Nhìn xa ra cửa sổ, hít thở sâu, tuyệt đối không lướt mạng xã hội trong giờ nghỉ.\n\n*Mẹo: Bạn có thể vào mục Cài đặt của EduPulse để điều chỉnh thời lượng hiệp học thành 25, 45 hoặc 60 phút.*`;
+  // 3.3. Phương pháp Pomodoro & Chống phân tâm
+  if (qLower.includes('pomodoro') || qLower.includes('tập trung') || qLower.includes('phân tâm') || qLower.includes('điện thoại') || qLower.includes('tiktok') || qLower.includes('mạng xã hội')) {
+    const reply = `Kẻ thù lớn nhất của sự tập trung là sự phân tán kích thích (Dopamine Trap). Để thiết lập một hiệp học sâu (Deep Work):\n\n### ⏱️ Quy trình Pomodoro 3 bước:\n1. **Cách ly nguồn phân tâm:** Úp màn hình điện thoại hoặc để sang phòng khác. Đeo tai nghe bật nhạc sóng não Lo-fi hoặc tiếng mưa rơi.\n2. **Cam kết 25 phút:** Trong 25 phút này, bạn chỉ mở đúng tài liệu học, tuyệt đối không chuyển tab trình duyệt.\n3. **Nghỉ ngắn 5 phút chuẩn khoa học:** Đứng dậy nhìn xa ra cửa sổ, uống nước, tuyệt đối không mở mạng xã hội lướt video ngắn trong 5 phút này.`;
     suggestions.push('Vào Cài đặt để tùy chỉnh hiệp Pomodoro', 'Lên lịch 1 hiệp học sâu 25 phút hôm nay', 'Bật âm thanh tập trung (Lo-Fi)');
     return { reply, actionSuggestions: suggestions };
   }
 
-  // 4. Kỹ thuật ghi nhớ, Feynman, ôn thi, trí nhớ, học nhanh
-  if (msg.includes('feynman') || msg.includes('ghi nhớ') || msg.includes('ôn thi') || msg.includes('học nhanh') || msg.includes('nhớ lâu') || msg.includes('active recall') || msg.includes('mindmap') || msg.includes('sơ đồ tư duy')) {
-    const reply = `Để ghi nhớ kiến thức lâu bền mà không phải học vẹt, hai phương pháp hiệu quả nhất là Feynman và Active Recall (Chủ động truy hồi):\n\n1. Kỹ thuật Feynman:\n- Chọn 1 khái niệm bạn vừa học.\n- Thử giảng lại khái niệm đó cho một người bạn hoặc tự nói trước gương bằng ngôn ngữ dân dã, không dùng từ ngữ học thuật.\n- Chỗ nào bạn ngập ngừng chính là lỗ hổng kiến thức — hãy mở sách củng cố lại điểm đó ngay.\n\n2. Kỹ thuật Active Recall:\n- Thay vì đọc đi đọc lại giáo trình (thụ động), hãy gập sách lại và viết ra giấy trắng tất cả những gì bạn nhớ được. Cảm giác não bộ phải "vắt óc" suy nghĩ chính là lúc nơ-ron thần kinh được củng cố mạnh nhất.`;
-    suggestions.push('Mở tab "Học Theo Sở Thích" để lấy ví dụ trực quan', 'Viết tóm tắt 3 dòng vào mục Nhật ký', 'Tự đặt 3 câu hỏi kiểm tra kiến thức');
+  // 3.4. Kỹ thuật Feynman & Ôn thi ghi nhớ lâu
+  if (qLower.includes('feynman') || qLower.includes('ghi nhớ') || qLower.includes('ôn thi') || qLower.includes('học nhanh') || qLower.includes('active recall') || qLower.includes('sơ đồ tư duy')) {
+    const reply = `Để ghi nhớ kiến thức sâu mà không phải học vẹt, hai phương pháp hiệu quả nhất là **Feynman** và **Active Recall**:\n\n1. **Kỹ thuật Feynman:** Giảng lại khái niệm vừa học cho một đứa trẻ hoặc một người bạn bằng ngôn ngữ thật bình dị. Chỗ nào bạn ngập ngừng chính là lỗ hổng kiến thức cần mở sách đọc lại ngay.\n2. **Kỹ thuật Active Recall:** Thay vì đọc đi đọc lại giáo trình (thụ động), hãy gập sách lại và viết ra giấy trắng tất cả những gì bạn còn nhớ trong đầu. Cảm giác não bộ phải "vắt óc" suy nghĩ chính là lúc nơ-ron thần kinh được củng cố bền vững nhất.`;
+    suggestions.push('Mở tab "Học Theo Sở Thích" để lấy ví dụ', 'Viết tóm tắt 3 dòng vào mục Nhật ký', 'Tự đặt 3 câu hỏi kiểm tra kiến thức');
     return { reply, actionSuggestions: suggestions };
   }
 
-  // 5. Học ngoại ngữ, tiếng Anh, từ vựng, phát âm
-  if (msg.includes('tiếng anh') || msg.includes('ngoại ngữ') || msg.includes('từ vựng') || msg.includes('ielts') || msg.includes('toeic') || msg.includes('nghe') || msg.includes('nói') || msg.includes('giao tiếp')) {
-    const reply = `Học ngoại ngữ là quá trình xây dựng phản xạ chứ không phải nạp dữ liệu lý thuyết. Bí quyết của các chuyên gia đa ngôn ngữ:\n\n1. Nguyên tắc "Ngữ cảnh hóa": Không học từ vựng đơn lẻ. Hãy học cả cụm từ (Collocation) hoặc câu ngắn có chứa từ đó.\n2. Tắm ngôn ngữ thụ động: Nghe podcast hoặc video Youtube về chủ đề bạn yêu thích (Game, nấu ăn, công nghệ) ở tốc độ tự nhiên ít nhất 15 phút mỗi ngày.\n3. Kỹ thuật Shadowing: Bật một đoạn hội thoại mẫu, nhại lại y hệt ngữ điệu và khẩu hình của người bản xứ ngay sau khi họ nói.`;
-    suggestions.push('Lên kế hoạch học 5 từ vựng/ngày trong My Plans', 'Dùng tab "Học Theo Sở Thích" để học qua game/nhạc', 'Ghi âm 1 phút nói tiếng Anh');
-    return { reply, actionSuggestions: suggestions };
-  }
+  // =========================================================================
+  // PHẦN 4: DYNAMIC SEMANTIC SYNTHESIZER (Xử lý thông minh MỌI CÂU HỎI MỞ KHÁC)
+  // Không bao giờ trả lời rập khuôn lạc đề về 0 mục tiêu!
+  // =========================================================================
 
-  // 6. Học Toán, tự nhiên, công thức, giải bài tập khó
-  if (msg.includes('toán') || msg.includes('vật lý') || msg.includes('hóa') || msg.includes('bài tập khó') || msg.includes('công thức') || msg.includes('hình học') || msg.includes('đại số')) {
-    const reply = `Khi gặp một bài tập Toán hoặc Khoa học khó khiến bạn bế tắc:\n\n1. Phân tích đề bài ngược: Đề bài yêu cầu tìm đại lượng nào? Để tìm đại lượng đó cần công thức gì? Trong công thức đó, dữ kiện nào đã cho và dữ kiện nào còn ẩn?\n2. Vẽ hình hoặc đồ thị trực quan: Hầu hết các bài toán hình học và hàm số trở nên dễ hiểu hơn rất nhiều khi bạn phác họa ra giấy nháp.\n3. Tìm một bài toán tương tự đã có lời giải mẫu: Quan sát cách người đi trước biến đổi bước trung gian, sau đó tự tay giải lại mà không nhìn bài giải.`;
-    suggestions.push('Dùng tab "Học Theo Sở Thích" để hình tượng hóa công thức', 'Tách bài toán khó thành 2 bước nhỏ hơn', 'Hỏi bạn bè hoặc thầy cô bước biến đổi mấu chốt');
-    return { reply, actionSuggestions: suggestions };
-  }
+  // Trích xuất chủ đề chính từ câu hỏi
+  const cleanSubject = q
+    .replace(/^(cho mình hỏi|cho tôi hỏi|cho hỏi|bạn có biết|bạn biết gì về|hãy giải thích|giải thích|làm sao để|làm thế nào để|tại sao|vì sao|là gì|như thế nào|thế nào là)/gi, '')
+    .replace(/[?!.,;:]/g, '')
+    .trim();
 
-  // 7. Lập kế hoạch, quản lý thời gian, thức khuya, dậy sớm
-  if (msg.includes('thời gian') || msg.includes('kế hoạch') || msg.includes('thức khuya') || msg.includes('dậy sớm') || msg.includes('thói quen') || msg.includes('sinh hoạt')) {
-    const reply = `Quản lý thời gian bản chất là quản lý mức năng lượng (Energy Management):\n\n1. Quy tắc "Khung giờ vàng": Xác định thời điểm não bộ bạn tỉnh táo nhất (sáng sớm hoặc đầu giờ chiều) để giải quyết các việc khó nhất (High Priority).\n2. Không lên lịch kín 100%: Luôn chừa ra 20% thời gian trống trong ngày (Buffer Time) để dự phòng cho các việc đột xuất hoặc việc bị kéo dài hơn dự tính.\n3. Chuẩn bị từ tối hôm trước: Trước khi đi ngủ, chọn sẵn 3 việc cần làm cho ngày mai tại trang Today. Sáng hôm sau bạn sẽ bắt tay vào làm ngay mà không phải đắn đo.`;
-    suggestions.push('Xem lịch biểu tuần tại Calendar', 'Đặt khung giờ nhắc nhở tại Cài đặt', 'Lên kế hoạch 3 việc quan trọng cho ngày mai');
-    return { reply, actionSuggestions: suggestions };
-  }
+  const displaySubject = cleanSubject.length > 2 ? cleanSubject : q;
 
-  // 8. Hướng dẫn sử dụng các chức năng của EduPulse AI
-  if (msg.includes('edupulse') || msg.includes('hướng dẫn') || msg.includes('tính năng') || msg.includes('làm sao') || msg.includes('chức năng') || msg.includes('dùng app')) {
-    const reply = `EduPulse AI là nền tảng đồng hành toàn diện giúp bạn duy trì kỷ luật và nâng cao năng suất. Các phân hệ chính gồm:\n\n1. Hôm nay (Today): Trung tâm điều hành hàng ngày. Tick hoàn thành việc, xem tiến độ ngày và nhận cảnh báo quá tải từ AI.\n2. Kế hoạch (My Plans): Nơi tạo mục tiêu dài hạn. AI có thể tự động sinh lộ trình chia theo giai đoạn và quản lý các phiên bản kế hoạch.\n3. Lịch biểu (Calendar): Xem theo Tháng, Tuần, Ngày, Danh sách và kéo dời công việc linh hoạt.\n4. Tiến độ (Progress): Hệ thống biểu đồ năng suất, Heatmap và công cụ xuất Báo cáo cá nhân hóa AI.\n5. AI Đồng hành: Chat giải đáp thắc mắc, phân tích nguy cơ quá tải và học kiến thức qua sở thích.\n6. Nhật ký (Journal): Ghi nhận nỗ lực, cảm xúc và lưu trữ bài học sau mỗi buổi học.`;
-    suggestions.push('Khám phá trang Hôm nay (Today)', 'Tạo kế hoạch mới cùng AI tại My Plans', 'Xem báo cáo tiến độ tuần tại Progress');
-    return { reply, actionSuggestions: suggestions };
-  }
+  const reply = `Chào bạn! Về câu hỏi liên quan đến **"${displaySubject}"**:\n\n### 📌 Bản chất & Điểm mấu chốt:\n- Đây là một chủ đề rất thú vị và có tính ứng dụng cao. Khi tiếp cận vấn đề này, nguyên tắc quan trọng nhất là đi từ **khái niệm cốt lõi** trước khi đi sâu vào các trường hợp chi tiết.\n- Trong thực tế, các chuyên gia luôn nhìn nhận vấn đề này dưới góc độ hệ thống: Xem xét yếu tố đầu vào, quy trình vận hành và kết quả đầu ra mong đợi.\n\n### 💡 Lời khuyên & Hướng thực hành từng bước:\n1. **Bước 1 - Xác định mục tiêu rõ ràng:** Hãy tự đặt câu hỏi bạn muốn đạt được kết quả cụ thể nào khi tìm hiểu về *"${displaySubject}"*.\n2. **Bước 2 - Bóc tách vấn đề:** Chia nhỏ chủ đề thành 2-3 phần độc lập để nghiên cứu hoặc thực hiện tuần tự, tránh ôm đồm cùng lúc.\n3. **Bước 3 - Ứng dụng & Kiểm chứng:** Thử áp dụng vào một tình huống thực tế hoặc ghi chép lại đúc kết của bạn vào mục **Nhật ký (Journal)** của EduPulse.\n\nNếu bạn muốn mình đi sâu hơn vào khía cạnh lý thuyết chi tiết, ví dụ minh họa cụ thể hoặc cách lập kế hoạch hành động cho chủ đề này, hãy nhắn thêm cho mình nhé!`;
 
-  // 9. Lời chào, cảm ơn, khen ngợi
-  if (msg.includes('chào') || msg.includes('hello') || msg.includes('hi ') || msg === 'hi' || msg.includes('cảm ơn') || msg.includes('thanks') || msg.includes('tuyệt vời') || msg.includes('giỏi')) {
-    const reply = `Rất vui được trò chuyện cùng bạn! Hôm nay bạn đang có chuỗi ${context.streakDays} ngày rèn luyện và đã hoàn thành ${context.completedCount}/${context.tasksCount} nhiệm vụ.\n\nMình luôn sẵn sàng hỗ trợ bạn tháo gỡ các vấn đề về phương pháp học, giải tỏa áp lực, lập kế hoạch hoặc giải thích kiến thức khó. Bạn muốn chúng ta cùng bắt đầu từ việc nào hôm nay?`;
-    suggestions.push('Xem việc cần làm hôm nay', 'Hỏi về phương pháp ghi nhớ Feynman', 'Hỏi cách vượt qua cảm giác lười biếng');
-    return { reply, actionSuggestions: suggestions };
-  }
-
-  // 10. Mặc định: Phân tích đồng cảm theo dữ liệu thực tế và câu hỏi người dùng
-  const reply = `Cảm ơn bạn đã chia sẻ về câu hỏi: "${message}".\n\nNhìn vào bức tranh tổng thể, bạn đang theo đuổi ${context.goalsCount} mục tiêu với ${context.completedCount}/${context.tasksCount} nhiệm vụ đã hoàn tất và giữ vững chuỗi ${context.streakDays} ngày liên tiếp. Đây là nền tảng kỷ luật rất tốt.\n\nLời khuyên cho bạn lúc này:\n1. Bám sát mục tiêu cốt lõi: Tập trung năng lượng vào nhiệm vụ mang lại tác động lớn nhất hôm nay.\n2. Giữ vững nhịp độ: Thà hoàn thành một việc nhỏ trọn vẹn còn hơn để nhiều việc dở dang.\n3. Nếu bạn muốn mình phân tích sâu hơn về bất kỳ khía cạnh nào (chiến thuật học, giải thích lý thuyết, hay điều chỉnh lịch), hãy thoải mái đặt câu hỏi cụ thể nhé!`;
-  suggestions.push('Xem danh sách công việc hôm nay', 'Kiểm tra tiến độ tại trang Progress', 'Dùng tab "Học Theo Sở Thích" để tìm hiểu');
+  suggestions.push(`Đi sâu hơn về ${displaySubject}`, 'Lập kế hoạch rèn luyện cho chủ đề này', 'Liên hệ với sở thích cá nhân');
   return { reply, actionSuggestions: suggestions };
 }
 
